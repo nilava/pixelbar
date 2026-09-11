@@ -76,6 +76,10 @@ class App {
   // device does not sit on a notice forever.
   static constexpr float kNetInfoSeconds = 12.0f;
 
+  // The screen predicate, for tests: whether the panel is on one of the
+  // network notices rather than a view the user chose.
+  static bool is_net_screen_public(panel::Screen s) { return is_net_screen(s); }
+
   bool busy() const { return mgr_.busy(); }
   float transition_progress() const { return mgr_.progress(); }
   // The screen a transition is leaving. Exposed so a test can tell a real
@@ -119,6 +123,16 @@ class App {
   // is reset to depth one so that a press or a turn leaves normally rather
   // than popping back into a screen the user never chose.
   void show_net(panel::Screen s);
+  // True for the three network notices, which share a way in and a way out.
+  static bool is_net_screen(panel::Screen s) {
+    return s == panel::Screen::WifiSetup || s == panel::Screen::WifiConnecting ||
+           s == panel::Screen::WifiInfo;
+  }
+  // Whether the person in front of the panel is following a setup they
+  // started. Set when setup mode begins and cleared once an address arrives,
+  // so the boot-time join stays silent while the one they just triggered from
+  // the phone reports itself.
+  bool net_watching_ = false;
   Ports::NetMode net_mode_ = Ports::NetMode::Online;
   float net_info_s_ = 0.0f;
 

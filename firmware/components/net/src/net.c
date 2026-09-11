@@ -119,8 +119,22 @@ static esp_timer_handle_t s_ap_down_timer = NULL;
 // is about twenty seconds with the backoff below.
 #define NET_MAX_BOOT_RETRIES 6
 
-net_mode_t net_mode(void) { return s_mode; }
+// A join the user is watching counts as joining, whatever mode the radio is
+// technically in. While the form's credentials are being tried the device is
+// still in setup — the AP is up and the portal is serving — but what the
+// person standing in front of the panel is doing is waiting to find out
+// whether it worked, and that is what the panel should say.
+net_mode_t net_mode(void) { return s_trying ? NET_MODE_JOINING : s_mode; }
 const char* net_setup_ssid(void) { return s_ap_ssid; }
+
+// The one string the panel shows, chosen by what the device is doing: the
+// network to join, the network being tried, or the address to visit. Decided
+// here because this is where the state is; main would only be guessing.
+const char* net_panel_text(void) {
+  if (s_trying) return s_try_ssid;
+  if (s_mode == NET_MODE_ONLINE) return s_ip;
+  return s_ap_ssid;
+}
 
 // The station half has nothing to connect to while the device is in setup
 // mode and nobody has submitted the form yet. Calling connect anyway makes it

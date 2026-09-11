@@ -58,8 +58,9 @@ enum class Screen : uint8_t {
   Booting,
   // The network, when it needs something from you. Not in the home carousel:
   // these are states the device is in, not views you choose between.
-  WifiSetup,  // no credentials: join this network and open the page
-  WifiInfo,   // the address, so you can reach the page from your own network
+  WifiSetup,       // no credentials: join this network and open the page
+  WifiConnecting,  // trying the credentials someone just typed
+  WifiInfo,        // the address, so you can reach the page from your own network
   Count,
 };
 

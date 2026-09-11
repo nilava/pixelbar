@@ -94,6 +94,7 @@ const char* screen_name(Screen s) {
     case Screen::Sleep: return "sleep";
     case Screen::Booting: return "booting";
     case Screen::WifiSetup: return "wifisetup";
+    case Screen::WifiConnecting: return "wificonnecting";
     case Screen::WifiInfo: return "wifiinfo";
     default: return "?";
   }
@@ -557,18 +558,27 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
     }
 
     case Screen::WifiSetup:
+    case Screen::WifiConnecting:
     case Screen::WifiInfo: {
-      // Both screens are a word and a marquee, and the only difference is
-      // which word and what colour. Setup is amber because it wants something
-      // from you; the address is the accent because it is just information.
+      // Three states, one layout: a signal mark and a marquee. What differs is
+      // the colour and what the arcs are doing, because those are the two
+      // things readable across a room on a panel eight pixels tall.
+      //
+      //   setup       amber, arcs climbing slowly   — it wants something
+      //   connecting  amber, arcs climbing fast     — it is working
+      //   info        accent, all three arcs lit    — it is done
       const bool setup = (s == Screen::WifiSetup);
-      const RGB tint = setup ? RGB(255, 150, 30) : ui.accent;
+      const bool trying = (s == Screen::WifiConnecting);
+      const RGB tint = (setup || trying) ? RGB(255, 150, 30) : ui.accent;
 
-      // The signal arcs, drawn at the left as a fixed mark so the marquee has
-      // something to be beside rather than floating alone. In setup they climb
-      // and reset, which reads as waiting; on the info screen all three stand,
-      // because by then it is connected.
-      const int lit = setup ? 1 + static_cast<int>(a.phase(1.2f) * 3.0f) % 3 : 3;
+      // The arcs climb and reset, which is the most direct way a three-bar
+      // signal mark can say "not yet". Faster while a join is actually in
+      // flight than while waiting to be told what to join: the difference in
+      // rate is what distinguishes the two amber screens at a glance.
+      const float rate = trying ? 3.0f : 1.2f;
+      const int lit = (setup || trying)
+                          ? 1 + static_cast<int>(a.phase(1.0f / rate) * 3.0f) % 3
+                          : 3;
       for (int arc = 0; arc < 3; ++arc) {
         const RGB c = (arc <= lit) ? tint : tint.scaled(28);
         // A quarter-circle of radius 2/4/6 about the bottom-left corner, which

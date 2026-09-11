@@ -74,6 +74,9 @@ net_mode_t net_mode(void);
 // The setup network's name, e.g. "PIXELBAR-A3F2". Empty unless in setup mode;
 // this is what the panel tells you to join.
 const char* net_setup_ssid(void);
+// What the panel should display for the current mode: the setup network to
+// join, the network being tried, or the address. Never null.
+const char* net_panel_text(void);
 
 // True once there is an address. What the panel shows while there is not.
 bool net_connected(void);

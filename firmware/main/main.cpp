@@ -155,7 +155,7 @@ extern "C" void app_main(void) {
         ports.set_net(m == NET_MODE_ONLINE  ? ui::Ports::NetMode::Online
                       : m == NET_MODE_JOINING ? ui::Ports::NetMode::Joining
                                               : ui::Ports::NetMode::Setup,
-                      m == NET_MODE_SETUP ? net_setup_ssid() : net_ip());
+                      net_panel_text());
       }
 
       ports.advance(a.dt);

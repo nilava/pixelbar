@@ -134,16 +134,25 @@ void App::update(float dt_s, double now_s) {
     if (mode != net_mode_) {
       const Ports::NetMode was = net_mode_;
       net_mode_ = mode;
+      if (mode == Ports::NetMode::Setup) net_watching_ = true;
       if (!booting_) {
         if (mode == Ports::NetMode::Setup) {
           show_net(panel::Screen::WifiSetup);
-        } else if (mode == Ports::NetMode::Online && was == Ports::NetMode::Setup) {
+        } else if (mode == Ports::NetMode::Joining && net_watching_) {
+          // Only for a join someone is standing there waiting on. The one at
+          // boot is covered by the boot sequence, and interrupting that with a
+          // progress screen every power-up would be noise: the panel would
+          // announce the network before it had said anything about itself.
+          show_net(panel::Screen::WifiConnecting);
+        } else if (mode == Ports::NetMode::Online && net_watching_) {
           // Setup just succeeded. Show the address for a few seconds, because
           // it is the one thing you need next and the only place it is
           // written down.
+          net_watching_ = false;
           show_net(panel::Screen::WifiInfo);
           net_info_s_ = kNetInfoSeconds;
         }
+        (void)was;
       }
     }
     // The address screen is a notice, not a destination.
@@ -249,14 +258,23 @@ void App::pop() {
 }
 
 void App::go_home() {
-  while (depth_ > 1) {
-    const TransitionKind back = inverse_of(nav_[depth_ - 1].enter_kind);
-    --depth_;
-    if (depth_ == 1) {
-      mgr_.go_to(kHomeViews[view_], ui_, back, panel::transition_seconds(back));
-      nav_[0] = NavFrame{kHomeViews[view_], TransitionKind::None};
-    }
+  // Defined by where it lands, not by how deep it starts.
+  //
+  // It used to be `while (depth_ > 1)`, which made it a silent no-op at depth
+  // one — and the network notices sit at depth one on a screen that is not a
+  // home view, so pressing to dismiss the address screen did nothing at all.
+  // Asking whether we are already home is the condition that was meant.
+  TransitionKind back = TransitionKind::Fade;
+  if (depth_ > 1) {
+    back = inverse_of(nav_[depth_ - 1].enter_kind);
+  } else if (nav_[0].enter_kind != TransitionKind::None) {
+    back = inverse_of(nav_[0].enter_kind);
   }
+  depth_ = 1;
+  const panel::Screen home = kHomeViews[view_];
+  nav_[0] = NavFrame{home, TransitionKind::None};
+  if (mgr_.current() == home) return;
+  mgr_.go_to(home, ui_, back, panel::transition_seconds(back));
 }
 
 void App::show_net(panel::Screen s) {
@@ -264,8 +282,10 @@ void App::show_net(panel::Screen s) {
   // turning leaves it the ordinary way. Pushing it instead would make "back"
   // return to a screen nobody asked for.
   depth_ = 1;
-  nav_[0] = NavFrame{s, TransitionKind::None};
   const TransitionKind k = TransitionKind::Ignite;
+  // The kind is recorded even though nothing is pushed, so that leaving plays
+  // the inverse rather than a default fade.
+  nav_[0] = NavFrame{s, k};
   mgr_.go_to(s, ui_, k, panel::transition_seconds(k));
 }
 
@@ -529,6 +549,12 @@ void App::handle(const Event& e, double now_s) {
         // Inside an adjuster, pressing accepts and goes back one level — to the
         // menu you came from, not onward to some unrelated setting.
         pop();
+      } else if (is_net_screen(screen())) {
+        // These are notices, so a press dismisses one. Without this the
+        // address screen could only be left by turning the knob or waiting it
+        // out, which is not something anybody would guess.
+        net_info_s_ = 0.0f;
+        go_home();
       } else if (screen() == Screen::Status) {
         set_status(ui_.status == Status::Busy ? Status::Free : Status::Busy);
       } else if (screen() == Screen::Timer) {

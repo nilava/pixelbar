@@ -796,6 +796,11 @@ class TestPorts : public Ports {
     return has_clock;
   }
   bool wifi_connected() override { return wifi; }
+  ui::Ports::NetMode net_mode() override { return mode; }
+  const char* net_text() override { return text; }
+
+  ui::Ports::NetMode mode = ui::Ports::NetMode::Online;
+  const char* text = "";
 
   RawInput raw;
   Settings stored;
@@ -811,8 +816,10 @@ class AppRig {
   // `with_clock` false starts the rig with no time source at all, which is
   // what a real device does until SNTP answers. time_valid latches on and
   // never off, so a test about the unsynced state has to begin there.
-  explicit AppRig(bool with_clock = true) {
+  explicit AppRig(bool with_clock = true,
+                  ui::Ports::NetMode net = ui::Ports::NetMode::Online) {
     ports.has_clock = with_clock;
+    ports.mode = net;
     app.begin(ports, 0.0);
     // Past the boot sequence *and* the fade that hands over from it, so a test
     // that starts by turning the knob is not competing with it.
@@ -1457,6 +1464,78 @@ void test_app_flourish() {
 }
 
 
+void test_net_screens() {
+  CASE("a device with no credentials says so, once the boot is over");
+  {
+    AppRig r(true, ui::Ports::NetMode::Setup);
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::WifiSetup));
+  }
+
+  CASE("a join the user started is reported; the one at boot is not");
+  {
+    // Boot straight into joining, as a provisioned device does on every power
+    // up. That must not put a progress screen in front of the boot sequence.
+    AppRig r(true, ui::Ports::NetMode::Joining);
+    CHECK(r.app.screen() != panel::Screen::WifiConnecting);
+    r.ports.mode = ui::Ports::NetMode::Online;
+    r.run(0.3f);
+    CHECK(r.app.screen() != panel::Screen::WifiInfo);
+  }
+
+  CASE("but a join that follows setup shows connecting, then the address");
+  {
+    AppRig r(true, ui::Ports::NetMode::Setup);
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::WifiSetup));
+
+    r.ports.mode = ui::Ports::NetMode::Joining;   // the form was submitted
+    r.run(0.3f);
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::WifiConnecting));
+
+    r.ports.mode = ui::Ports::NetMode::Online;    // and it worked
+    r.run(0.3f);
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::WifiInfo));
+  }
+
+  CASE("the address screen can be pressed away, and times out on its own");
+  {
+    AppRig r(true, ui::Ports::NetMode::Setup);
+    r.ports.mode = ui::Ports::NetMode::Joining;
+    r.run(0.3f);
+    r.ports.mode = ui::Ports::NetMode::Online;
+    r.run(0.3f);
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::WifiInfo));
+    r.press();
+    r.settle();
+    CHECK(!App::is_net_screen_public(r.app.screen()));
+
+    // And again, left alone this time.
+    AppRig q(true, ui::Ports::NetMode::Setup);
+    q.ports.mode = ui::Ports::NetMode::Joining;
+    q.run(0.3f);
+    q.ports.mode = ui::Ports::NetMode::Online;
+    q.run(0.3f);
+    CHECK_EQ(static_cast<int>(q.app.screen()),
+             static_cast<int>(panel::Screen::WifiInfo));
+    q.run(App::kNetInfoSeconds + 1.0f);
+    CHECK(!App::is_net_screen_public(q.app.screen()));
+  }
+
+  CASE("and turning the knob leaves it too");
+  {
+    AppRig r(true, ui::Ports::NetMode::Setup);
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::WifiSetup));
+    r.turn(1);
+    r.settle();
+    CHECK(!App::is_net_screen_public(r.app.screen()));
+  }
+}
+
 void test_clock_validity() {
   CASE("the clock is not valid until a time source says so");
   {
@@ -1585,6 +1664,7 @@ void run_ui_tests() {
   test_app_adjust();
   test_app_flourish();
   test_app_sleep_and_settings();
+  test_net_screens();
   test_clock_validity();
   test_view_transition();
   test_nav_inverse();
