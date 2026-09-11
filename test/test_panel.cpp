@@ -491,6 +491,33 @@ static void test_screens() {
     }
   }
 
+  CASE("the sheen never lights a cell that has nothing in it");
+  {
+    // Reported from a photograph: a single dim pixel crawling along the bottom
+    // row every six seconds on an otherwise dark row. The sheen was adding
+    // light wherever it travelled, and where it travelled was empty — which
+    // does not read as a highlight, it reads as a fault.
+    //
+    // Swept across a whole period so the head passes every column. Rows 6 and
+    // 7 of the label area hold nothing: the mini font is five rows tall drawn
+    // at y=1, so anything lit below it came from somewhere it should not have.
+    UiState ui;
+    ui.status = Status::Busy;
+    // Milliseconds, not seconds: draw_screen takes a uint32_t of ms, and the
+    // first version of this test swept seven *milliseconds* and passed
+    // against the very bug it was written for.
+    for (uint32_t ms = 0; ms <= 7000; ms += 25) {
+      Framebuffer fb;
+      draw_screen(fb, Screen::Status, ui, ms);
+      for (int x = kLabelX; x < kWidth; ++x) {
+        for (int y = 6; y <= 7; ++y) {
+          const RGB p = fb.get(x, y);
+          CHECK(p.r == 0 && p.g == 0 && p.b == 0);
+        }
+      }
+    }
+  }
+
   CASE("the status screen shows the status colour");
   UiState ui;
   Framebuffer fb;

@@ -69,13 +69,32 @@ void draw_play_hint(Framebuffer& fb, const Anim& a, RGB c) {
 
 // A sheen that crosses the label area now and then: enough motion to read as
 // alive from across a room, not enough to pull your eye off a monitor.
-void sheen(Framebuffer& fb, const Anim& a, int row, int x0, int x1, RGB c, float period_s) {
+// A specular highlight sweeping across whatever is already lit.
+//
+// It used to run along row 7 and add light wherever it went. Row 7 under the
+// label is empty, so what it actually produced was a single dim pixel
+// crawling from one edge to the other every six seconds on an otherwise dark
+// row — which does not read as a highlight at all, it reads as a fault, and
+// was reported as one.
+//
+// The mistake was adding light to nothing. A sheen is what a surface does
+// with light, so it only brightens cells that already have ink in them and
+// leaves empty ones alone. That also means it can sweep the whole label
+// rather than a row beside it, which is where a highlight belongs.
+void sheen(Framebuffer& fb, const Anim& a, int y0, int y1, int x0, int x1, RGB c,
+           float period_s) {
   const float p = a.phase(period_s);
   if (p > 0.45f) return;  // travels for part of the cycle, then rests
   const float head = x0 + (p / 0.45f) * (x1 - x0 + 4) - 2.0f;
   for (int k = 0; k < 3; ++k) {
     const float w = 1.0f - k * 0.33f;
-    fb.set_aa(head - k, row, c, 0.12f * w, Blend::Add);
+    const int x = static_cast<int>(head - k + 0.5f);
+    if (x < x0 || x > x1) continue;
+    for (int y = y0; y <= y1; ++y) {
+      const RGB under = fb.get(x, y);
+      if (under.r == 0 && under.g == 0 && under.b == 0) continue;
+      fb.set_aa(static_cast<float>(x), y, c, 0.45f * w, Blend::Add);
+    }
   }
 }
 
@@ -390,7 +409,10 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       }
       // The sheen travels the label area, which only exists in the icon
       // layout. Over a filled badge it would read as a smudge on the colour.
-      if (!status_uses_badge(ui.status)) sheen(fb, a, 7, kLabelX, kWidth - 1, c, 6.0f);
+      // Over the label's own rows, so it passes across the word. Over a filled
+      // badge it would read as a smudge on the colour, so badges keep none.
+      if (!status_uses_badge(ui.status))
+        sheen(fb, a, 1, 6, kLabelX, kWidth - 1, c, 6.0f);
       break;
     }
 
