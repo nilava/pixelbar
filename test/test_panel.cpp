@@ -21,39 +21,11 @@
 
 using namespace panel;
 
-static int g_failures = 0;
-static int g_checks = 0;
-static const char* g_case = "";
+#include "harness.h"
 
-#define CASE(name) g_case = name
-#define CHECK(cond)                                                             \
-  do {                                                                          \
-    ++g_checks;                                                                 \
-    if (!(cond)) {                                                              \
-      ++g_failures;                                                             \
-      std::printf("  FAIL %s:%d [%s] %s\n", __FILE__, __LINE__, g_case, #cond); \
-    }                                                                           \
-  } while (0)
-#define CHECK_EQ(a, b)                                                     \
-  do {                                                                     \
-    ++g_checks;                                                            \
-    const long _a = static_cast<long>(a), _b = static_cast<long>(b);       \
-    if (_a != _b) {                                                        \
-      ++g_failures;                                                        \
-      std::printf("  FAIL %s:%d [%s] %s == %s (%ld vs %ld)\n", __FILE__,   \
-                  __LINE__, g_case, #a, #b, _a, _b);                       \
-    }                                                                      \
-  } while (0)
-#define CHECK_NEAR(a, b, tol)                                              \
-  do {                                                                     \
-    ++g_checks;                                                            \
-    const double _a = (a), _b = (b);                                       \
-    if (std::fabs(_a - _b) > (tol)) {                                      \
-      ++g_failures;                                                        \
-      std::printf("  FAIL %s:%d [%s] %s ~= %s (%.3f vs %.3f)\n", __FILE__, \
-                  __LINE__, g_case, #a, #b, _a, _b);                       \
-    }                                                                      \
-  } while (0)
+int g_failures = 0;
+int g_checks = 0;
+const char* g_case = "";
 
 static int lit_count(const Framebuffer& fb) {
   int n = 0;
@@ -1380,6 +1352,7 @@ int main() {
   test_digit_roll();
   test_transitions();
   test_dither();
+  run_ui_tests();
   std::printf("%d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;
 }
