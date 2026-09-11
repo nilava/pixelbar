@@ -547,6 +547,72 @@ void test_switch_noise() {
   }
 }
 
+
+void test_switch_ignored_while_turning() {
+  CASE("a sustained switch dip during a fast turn is not a press");
+  {
+    // The failure this pins, reported twice from the board: during a fast turn
+    // the rotary contacts make and break continuously, so the ground they share
+    // with the push switch is disturbed for as long as the turning lasts — not
+    // for a few milliseconds. A longer debounce cannot fix that without making
+    // a real press feel slow, so the switch is simply not read while the knob
+    // is moving.
+    Rig r;
+    for (int i = 0; i < 60; ++i) {
+      r.turn(1);
+      r.sw(i % 3 != 0);  // the line dipping and recovering, for many frames
+      r.step();
+    }
+    r.sw(false);
+    r.hold_for(0.3f);
+    CHECK_EQ(r.count(EventType::Press), 0);
+    CHECK_EQ(r.count(EventType::DoublePress), 0);
+    CHECK_EQ(r.count(EventType::PressHoldBegin), 0);
+    // And every detent still counted.
+    int total = 0;
+    for (const Event& e : r.got())
+      if (e.type == EventType::Turn) total += e.delta;
+    CHECK_EQ(total, 60);
+  }
+
+  CASE("and holding the switch through a turn does not open the menu");
+  {
+    // The other half of the same report: the menu kept exiting on its own,
+    // because a dip long enough to look like a hold arrived while turning.
+    Rig r;
+    r.sw(true);
+    for (int i = 0; i < 80; ++i) {
+      r.turn(1);
+      r.step();
+    }
+    CHECK_EQ(r.count(EventType::PressHoldBegin), 0);
+  }
+
+  CASE("a press once the knob has stopped still works, and quickly");
+  {
+    Rig r;
+    r.turn(5);
+    r.step();
+    r.hold_for(0.12f);  // the settle window, and no more
+    r.sw(true);
+    r.hold_for(0.05f);
+    r.sw(false);
+    r.hold_for(0.04f);
+    CHECK_EQ(r.count(EventType::Press), 1);
+  }
+
+  CASE("and a hold once it has stopped still opens the menu");
+  {
+    Rig r;
+    r.turn(3);
+    r.step();
+    r.hold_for(0.12f);
+    r.sw(true);
+    r.hold_for(0.6f);
+    CHECK_EQ(r.count(EventType::PressHoldBegin), 1);
+  }
+}
+
 void test_motion() {
   CASE("a knock is a tap, a wallop is a shake, and one is not both");
   {
@@ -1392,6 +1458,7 @@ void run_ui_tests() {
   test_chord_is_not_a_swipe();
   test_encoder();
   test_switch_noise();
+  test_switch_ignored_while_turning();
   test_motion();
   test_no_crosstalk();
   test_app_boot_and_views();

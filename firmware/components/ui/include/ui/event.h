@@ -97,12 +97,20 @@ struct GestureConfig {
   // and changing brightness.
   float switch_stable_s = 0.015f;
 
-  // How long the switch must have been settled *down* before a turn counts as
-  // the press-and-turn modifier rather than an ordinary turn. Press-and-turn is
-  // a deliberate two-handed gesture; requiring the press to settle first is
-  // both true to that and the thing that makes a ground-bounce glitch
-  // impossible to mistake for one.
-  float press_turn_arm_s = 0.08f;
+  // How long after the knob last moved before the switch is believed again.
+  //
+  // A longer debounce was the first answer and it is the wrong one: during a
+  // fast turn the rotary contacts make and break continuously, so the ground
+  // they share with the switch is disturbed for as long as you keep turning,
+  // not for a few milliseconds. No debounce window short enough to keep a press
+  // feeling instant is long enough to outlast that.
+  //
+  // So the switch is simply not read while the knob is moving. That is not a
+  // workaround, it is the physical fact: on this module the switch line is not
+  // trustworthy while the rotary contacts are working. Nothing is lost, because
+  // turning while pressed is not a gesture any more — and in practice you stop
+  // turning before you press.
+  float switch_settle_after_turn_s = 0.09f;
 
   // Motion thresholds, in g. The tap figure is the least grounded number in
   // the design and must be measured against a desk bump before it is trusted.

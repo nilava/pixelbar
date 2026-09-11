@@ -148,8 +148,9 @@ class Recogniser {
   float swipe_last_s_ = 0.0f;
 
   // The encoder switch, with the same tap/hold shape as a zone.
-  bool sw_down_ = false;     // debounced
-  bool sw_raw_ = false;      // last raw level
+  float since_turn_s_ = 10.0f;  // how long since the knob last moved
+  bool sw_down_ = false;        // debounced
+  bool sw_raw_ = false;         // last raw level
   float sw_stable_s_ = 0.0f; // how long raw has held its value
   float sw_down_s_ = 0.0f;
   float sw_since_release_s_ = 0.0f;

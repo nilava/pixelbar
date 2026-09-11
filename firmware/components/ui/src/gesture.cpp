@@ -45,6 +45,7 @@ void Recogniser::reset() {
   for (int i = 0; i < kZones; ++i) swipe_seq_[i] = -1;
   swipe_len_ = 0;
   swipe_last_s_ = 0.0f;
+  since_turn_s_ = 10.0f;
   sw_down_ = false;
   sw_raw_ = false;
   sw_stable_s_ = 0.0f;
@@ -215,13 +216,26 @@ int Recogniser::update(const RawInput& in, float dt_s, Event* out, int max) {
   // The switch is settled before the turn is judged, not after. Reading a stale
   // switch state would put the modifier decision one frame behind the movement
   // it is supposed to qualify.
+  //
+  // The switch is only believed when the knob has been still for a moment. The
+  // rotary contacts share its ground, so while they are working the switch line
+  // is disturbed for as long as the turning lasts — which no debounce window
+  // short enough to keep a press feeling instant can outlast.
+  //
+  // The delta is read before the switch is judged, not after, so a turn gates
+  // the switch on the same frame it happens rather than the next one.
+  const int32_t det = in.encoder_detents;
+  const int32_t ddet = det - last_detents_;
+  last_detents_ = det;
+  since_turn_s_ = (ddet != 0) ? 0.0f : since_turn_s_ + dt_s;
+  const bool turning = since_turn_s_ < cfg_.switch_settle_after_turn_s;
   if (in.encoder_sw != sw_raw_) {
     sw_raw_ = in.encoder_sw;
     sw_stable_s_ = 0.0f;
   } else {
     sw_stable_s_ += dt_s;
   }
-  if (sw_stable_s_ >= cfg_.switch_stable_s && sw_down_ != sw_raw_) {
+  if (!turning && sw_stable_s_ >= cfg_.switch_stable_s && sw_down_ != sw_raw_) {
     sw_down_ = sw_raw_;
     if (sw_down_) {
       sw_down_s_ = 0.0f;
@@ -244,7 +258,8 @@ int Recogniser::update(const RawInput& in, float dt_s, Event* out, int max) {
   }
   if (sw_down_) {
     sw_down_s_ += dt_s;
-    if (!sw_hold_fired_ && !sw_turned_while_down_ && sw_down_s_ >= cfg_.hold_s) {
+    if (!turning && !sw_hold_fired_ && !sw_turned_while_down_ &&
+        sw_down_s_ >= cfg_.hold_s) {
       sw_hold_fired_ = true;
       sw_press_pending_ = false;
       n = emit(out, max, n, Event(EventType::PressHoldBegin));
@@ -260,10 +275,6 @@ int Recogniser::update(const RawInput& in, float dt_s, Event* out, int max) {
   // the first detent of the session is a real one. Priming on the first frame
   // would swallow it, which on hardware reads as the encoder ignoring the very
   // first click after boot.
-  const int32_t det = in.encoder_detents;
-  const int32_t ddet = det - last_detents_;
-  last_detents_ = det;
-
   // Rate over a sliding window, so a long sweep can be made to step faster
   // without a single slow detent ever being multiplied.
   turn_win_s_ += dt_s;
