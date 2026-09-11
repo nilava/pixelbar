@@ -160,6 +160,47 @@ void blit_offset(Framebuffer& dst, const Framebuffer& src, float dx, float dy) {
   }
 }
 
+void blit_disk(Framebuffer& dst, const Framebuffer& src, float turn, float gain_hub,
+               float gain_rim) {
+  if (gain_rim < 0.0f) gain_rim = gain_hub;
+  if (gain_hub <= 0.0f && gain_rim <= 0.0f) return;
+  for (int x = 0; x < kWidth; ++x) {
+    const float u = static_cast<float>(x) / static_cast<float>(kWidth - 1);
+    const float gain = gain_hub + (gain_rim - gain_hub) * u;
+    if (gain <= 0.0f) continue;
+    // Every radius turns through the same angle, so the distance it travels is
+    // proportional to how far out it is. Unrolled, that is a vertical offset
+    // that grows across the panel: the rim end sweeps past while the hub end
+    // barely stirs. A slide moves every column by the same amount, which is
+    // exactly the thing this is not.
+    const float dy = turn * (kDiskHubRadius + static_cast<float>(x));
+    for (int y = 0; y < kHeight; ++y) {
+      const float sy = y - dy;
+      const int y0 = static_cast<int>(std::floor(sy));
+      const float fy = sy - y0;
+      float r = 0, g = 0, b = 0;
+      const int py[2] = {y0, y0 + 1};
+      const float w[2] = {1.0f - fy, fy};
+      for (int i = 0; i < 2; ++i) {
+        if (w[i] <= 0.0f || !in_bounds(x, py[i])) continue;
+        const RGB c = src.get(x, py[i]);
+        r += c.r * w[i];
+        g += c.g * w[i];
+        b += c.b * w[i];
+      }
+      r *= gain;
+      g *= gain;
+      b *= gain;
+      if (r < 0.5f && g < 0.5f && b < 0.5f) continue;
+      dst.add_scaled(x, y,
+                     RGB(static_cast<uint8_t>(std::min(255.0f, r + 0.5f)),
+                         static_cast<uint8_t>(std::min(255.0f, g + 0.5f)),
+                         static_cast<uint8_t>(std::min(255.0f, b + 0.5f))),
+                     1.0f);
+    }
+  }
+}
+
 void cross_fade(Framebuffer& dst, const Framebuffer& a, const Framebuffer& b, float u) {
   if (u < 0.0f) u = 0.0f;
   if (u > 1.0f) u = 1.0f;

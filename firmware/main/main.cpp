@@ -122,8 +122,9 @@ extern "C" void app_main(void) {
         stop = (stop + 1) % kTourLen;
         ui.status = kTour[stop].status;
         if (kTour[stop].screen == kTour[prev].screen) {
-          // Same screen, new status: dissolve in place.
-          screens.restart_with(panel::TransitionKind::Dissolve, 0.3f);
+          // Same screen, new status: the panel is claimed in place.
+          screens.restart_with(panel::TransitionKind::Ignite,
+                               panel::transition_seconds(panel::TransitionKind::Ignite));
         } else {
           screens.go_to(kTour[stop].screen);
         }

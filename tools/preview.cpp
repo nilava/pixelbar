@@ -329,7 +329,8 @@ void render_clip(const Clip& c, const std::string& dir) {
       if (c.kind == TransitionKind::None) {
         mgr.go_to(c.go_to);
       } else if (c.go_to == mgr.current()) {
-        mgr.restart_with(c.kind, 0.3f);  // a change in place, not a new screen
+        // A change in place, not a new screen.
+        mgr.restart_with(c.kind, transition_seconds(c.kind));
       } else {
         mgr.go_to(c.go_to, c.kind);
       }
@@ -383,7 +384,7 @@ void render_all_clips(const std::string& dir) {
       {"colorpick", Screen::ColorPick, Status::Free, 4.0f},
       {"sleep", Screen::Sleep, Status::Free, 4.0f},
       {"booting", Screen::Booting, Status::Free, 3.0f},
-      {"trans-slide", Screen::Status, Status::Busy, 2.0f, Screen::Clock, 0.6f},
+      {"trans-disk", Screen::Status, Status::Busy, 2.2f, Screen::Clock, 0.6f},
       {"trans-wipe", Screen::Timer, Status::Busy, 2.0f, Screen::Brightness, 0.6f},
       {"trans-fade", Screen::Status, Status::Busy, 2.5f, Screen::Sleep, 0.7f},
       // A status change with no screen transition at all: the icon and the word
@@ -391,10 +392,12 @@ void render_all_clips(const std::string& dir) {
       // the motion reads as an object changing or as pixels being swapped.
       {"swap-status", Screen::Status, Status::Free, 2.4f, Screen::Status, 0.7f,
        TransitionKind::None, Status::Busy},
-      // FREE turning into BUSY: the ring solidifying into a disc is the whole
-      // reason the two icons share a silhouette.
-      {"trans-dissolve", Screen::Status, Status::Free, 2.2f, Screen::Status, 0.6f,
-       TransitionKind::Dissolve, Status::Busy},
+      // Claiming a status: the new colour bursts out of the icon, takes the
+      // panel, and is drawn back in leaving the new word behind.
+      {"trans-ignite", Screen::Status, Status::Free, 2.6f, Screen::Status, 0.6f,
+       TransitionKind::Ignite, Status::Busy},
+      {"trans-ignite-dnd", Screen::Status, Status::Busy, 2.6f, Screen::Status, 0.6f,
+       TransitionKind::Ignite, Status::Dnd},
   };
   for (const Clip& c : clips) render_clip(c, dir);
 }

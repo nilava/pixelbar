@@ -24,12 +24,28 @@ enum class TransitionKind : uint8_t {
   WipeDown,
   Dissolve,
   Fade,
+  // The panel as a radial strip of a record. Content swings through rather
+  // than sliding: see blit_disk. This is the one for moving between items in
+  // a list, because a list on a disk is what the gesture implies.
+  DiskUp,
+  DiskDown,
+  // A full-panel event, not a way of getting somewhere. A front of the new
+  // colour bursts out of the icon, floods the whole panel, and is then drawn
+  // back into the icon, leaving the new screen behind it. Two stages, so it
+  // reads as the panel being claimed by something and then absorbing it,
+  // rather than as one picture being replaced by another.
+  Ignite,
   Count,
 };
 
 const char* transition_name(TransitionKind k);
 
+// How long a kind should take when nobody says otherwise.
+float transition_seconds(TransitionKind k);
+
 constexpr float kTransitionSeconds = 0.25f;
+// A disk has mass. It takes longer to come round, and it settles.
+constexpr float kDiskSeconds = 0.42f;
 
 // Deterministic dissolve order. 89 is coprime with 192, so this is a bijection
 // over the panel: every pixel gets a distinct rank and the dissolve can be
@@ -72,8 +88,21 @@ class ScreenManager {
   float dur_ = kTransitionSeconds;
 };
 
+// Where Ignite's front starts: the middle of the 8x8 icon.
+constexpr float kIgniteOriginX = 3.5f;
+constexpr float kIgniteOriginY = 3.5f;
+// The far corner is 20.3 away under the row stretch below, so this is just
+// enough to clear it. Any more and the front spends the difference travelling
+// over ground it has already covered, which shows up as a dead plateau of flat
+// colour in the middle of the event.
+constexpr float kIgniteMaxRadius = 21.5f;
+// Where the front stops growing and starts being drawn back in.
+constexpr float kIgniteTurnPoint = 0.34f;
+constexpr float kIgniteSeconds = 0.80f;
+
 // Composites two frames. Exposed so the blends can be tested on their own.
+// `accent` is the colour Ignite floods with; the other kinds ignore it.
 void compose(Framebuffer& out, const Framebuffer& from, const Framebuffer& to,
-             TransitionKind k, float progress);
+             TransitionKind k, float progress, RGB accent = RGB(255, 255, 255));
 
 }  // namespace panel

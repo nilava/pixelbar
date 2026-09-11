@@ -1252,10 +1252,13 @@ static void test_transitions() {
   CHECK_EQ(lit_count(out), 0);
 
   CASE("the transition kind matches the gesture");
+  // The view cycle turns like a record, so it reads as one list of items on
+  // one object rather than a stack of unrelated cards.
   CHECK_EQ(static_cast<int>(ScreenManager::kind_for(Screen::Status, Screen::Clock)),
-           static_cast<int>(TransitionKind::SlideLeft));
+           static_cast<int>(TransitionKind::DiskUp));
   CHECK_EQ(static_cast<int>(ScreenManager::kind_for(Screen::Clock, Screen::Status)),
-           static_cast<int>(TransitionKind::SlideRight));
+           static_cast<int>(TransitionKind::DiskDown));
+  CHECK(transition_seconds(TransitionKind::DiskUp) > transition_seconds(TransitionKind::Fade));
   CHECK_EQ(static_cast<int>(ScreenManager::kind_for(Screen::Timer, Screen::Brightness)),
            static_cast<int>(TransitionKind::WipeUp));
   CHECK_EQ(static_cast<int>(ScreenManager::kind_for(Screen::Brightness, Screen::Timer)),
@@ -1272,7 +1275,9 @@ static void test_transitions() {
   Anim step;
   step.dt = 0.01f;
   int blank_frames = 0;
-  for (int i = 0; i < 40; ++i) {
+  // Long enough for the slowest kind, whatever kind_for picked.
+  const int frames = static_cast<int>(transition_seconds(TransitionKind::DiskUp) * 100.0f) + 8;
+  for (int i = 0; i < frames; ++i) {
     step.t = 1.0 + i * 0.01;
     m.render(out, ui, step);
     CHECK(m.progress() >= last);
@@ -1281,7 +1286,7 @@ static void test_transitions() {
   }
   CHECK(!m.busy());
   CHECK_EQ(m.current(), static_cast<int>(Screen::Clock));
-  CHECK(blank_frames == 0);  // a slide never goes dark
+  CHECK(blank_frames == 0);  // the view cycle never goes dark
 
   CASE("both screens keep animating through a transition");
   ScreenManager m2;

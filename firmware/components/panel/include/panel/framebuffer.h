@@ -80,6 +80,36 @@ class Framebuffer {
 // dst += src sampled at (x-dx, y-dy), bilinear. The workhorse of slides.
 void blit_offset(Framebuffer& dst, const Framebuffer& src, float dx, float dy);
 
+// The panel read as a radial strip of a turning disk: column 0 nearest the hub,
+// column 23 at the rim.
+//
+// Content printed on a disk advances through the same *angle* at every radius,
+// and therefore through a different *distance*. Unrolled, that is a vertical
+// displacement proportional to the radius. It is the reason this feels like a
+// physical record and a slide does not: the rim end whips past, the hub end
+// crawls, and a glyph spanning several columns shears as it goes because its
+// left edge is moving slower than its right.
+//
+// The hub does not sit at column 0 exactly. A true hub radius of zero would pin
+// the left column in place forever, and there would be no movement there at all
+// to fade out; a few columns of offset keeps the ratio dramatic while still
+// letting the whole panel clear.
+constexpr float kDiskHubRadius = 5.0f;
+
+// `turn` is rows of displacement per unit radius. The rim clears the panel at
+// about 0.29, by which point the hub has moved a little over one row.
+constexpr float kDiskClearTurn = 0.29f;
+
+// dst += src displaced by the disk shear.
+//
+// The gain is radial for the same reason the displacement is. A column near the
+// rim leaves the panel by travelling, so it can stay bright the whole way; a
+// column near the hub cannot travel far enough to leave at all, so it has to be
+// faded instead. One scalar gain for the whole panel would either strand the
+// hub or dim the rim into a cross-fade, which is the failure this is avoiding.
+void blit_disk(Framebuffer& dst, const Framebuffer& src, float turn,
+               float gain_hub = 1.0f, float gain_rim = -1.0f);
+
 // dst = a*(1-u) + b*u, per channel.
 void cross_fade(Framebuffer& dst, const Framebuffer& a, const Framebuffer& b, float u);
 

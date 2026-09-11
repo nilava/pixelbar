@@ -13,6 +13,9 @@ const char* transition_name(TransitionKind k) {
     case TransitionKind::WipeDown: return "wipedown";
     case TransitionKind::Dissolve: return "dissolve";
     case TransitionKind::Fade: return "fade";
+    case TransitionKind::DiskUp: return "diskup";
+    case TransitionKind::DiskDown: return "diskdown";
+    case TransitionKind::Ignite: return "ignite";
     default: return "?";
   }
 }
@@ -44,12 +47,19 @@ TransitionKind ScreenManager::kind_for(Screen from, Screen to) {
 
   const int a = view_order(from), b = view_order(to);
   if (a >= 0 && b >= 0) {
-    // Wrapping from the last view back to the first should still read forward.
+    // The views are items on a record, not cards in a stack. Wrapping from the
+    // last back to the first should still read forward.
     const int n = 3;
-    return ((b - a + n) % n == 1) ? TransitionKind::SlideLeft
-                                  : TransitionKind::SlideRight;
+    return ((b - a + n) % n == 1) ? TransitionKind::DiskUp
+                                  : TransitionKind::DiskDown;
   }
   return TransitionKind::Fade;
+}
+
+float transition_seconds(TransitionKind k) {
+  if (k == TransitionKind::DiskUp || k == TransitionKind::DiskDown) return kDiskSeconds;
+  if (k == TransitionKind::Ignite) return kIgniteSeconds;
+  return kTransitionSeconds;
 }
 
 void ScreenManager::set_screen(Screen s) {
@@ -58,7 +68,10 @@ void ScreenManager::set_screen(Screen s) {
   elapsed_ = 0.0f;
 }
 
-void ScreenManager::go_to(Screen s) { go_to(s, kind_for(to_, s)); }
+void ScreenManager::go_to(Screen s) {
+  const TransitionKind k = kind_for(to_, s);
+  go_to(s, k, transition_seconds(k));
+}
 
 void ScreenManager::go_to(Screen s, TransitionKind k, float dur_s) {
   if (s == to_ && k != TransitionKind::Dissolve) return;
@@ -98,7 +111,7 @@ void ScreenManager::render(Framebuffer& out, const UiState& ui, const Anim& a) {
   // status change dissolves from the old word into the new one.
   draw_screen(from_fb_, from_, from_ui_, a, from_anim_);
   draw_screen(to_fb_, to_, ui, a, to_anim_);
-  compose(out, from_fb_, to_fb_, kind_, p);
+  compose(out, from_fb_, to_fb_, kind_, p, status_color(ui.status));
 
   if (p >= 1.0f) {
     kind_ = TransitionKind::None;
@@ -108,7 +121,7 @@ void ScreenManager::render(Framebuffer& out, const UiState& ui, const Anim& a) {
 }
 
 void compose(Framebuffer& out, const Framebuffer& from, const Framebuffer& to,
-             TransitionKind k, float progress) {
+             TransitionKind k, float progress, RGB accent) {
   const float p = clamp01(progress);
   out.clear();
 
@@ -145,6 +158,105 @@ void compose(Framebuffer& out, const Framebuffer& from, const Framebuffer& to,
         const uint8_t k8 = static_cast<uint8_t>((e * 2.0f - 1.0f) * 255.0f);
         for (int y = 0; y < kHeight; ++y)
           for (int x = 0; x < kWidth; ++x) out.set(x, y, to.get(x, y).scaled(k8));
+      }
+      break;
+    }
+
+    case TransitionKind::DiskUp:
+    case TransitionKind::DiskDown: {
+      // The outgoing item carries on round and the incoming one arrives from
+      // the opposite side, both sheared by radius, so the two are always the
+      // same angle apart. The rim ends cross fast, the hub ends barely part.
+      //
+      // out_back rather than out_cubic: a disk with mass overshoots its detent
+      // and comes back, and the small recoil is most of what makes it feel
+      // like something you turned rather than something that was redrawn.
+      const float dir = (k == TransitionKind::DiskUp) ? -1.0f : 1.0f;
+      const float e = ease::out_back(p);
+      const float turn = e * kDiskClearTurn * dir;
+
+      // The hub end cannot travel far enough to leave the panel on its own —
+      // that is inherent to a disk, not a shortcut — so it is faded out. The
+      // curves are cubic at the ends and flat in the middle on purpose: both
+      // items stay near full brightness while they are actually sweeping past
+      // each other, so what you see is two things moving, and the fade only
+      // does its work in the moments either side. Make these linear and the
+      // whole thing collapses back into a cross-fade with extra steps.
+      // The rim leaves and arrives by moving, so it keeps its brightness until
+      // the very end (the cube). The hub cannot move, so it crosses over early
+      // (the near-linear curve) and is finished with before the eye gets to it.
+      const float q = 1.0f - p;
+      const float hub = std::pow(p, 0.8f);
+      blit_disk(out, from, turn, 1.0f - hub, 1.0f - p * p * p);
+      blit_disk(out, to, turn - dir * kDiskClearTurn, hub, 1.0f - q * q * q);
+      break;
+    }
+
+    case TransitionKind::Ignite: {
+      // Stage one grows the front out of the icon and floods behind it. Stage
+      // two draws the front back in, and what it uncovers is the new screen.
+      // The field is the same object throughout, which is what makes this read
+      // as one event rather than two effects played back to back.
+      const bool drawing_in = p >= kIgniteTurnPoint;
+      float r;
+      if (!drawing_in) {
+        // Out fast: this is a release of something, not a slide.
+        r = ease::out_cubic(p / kIgniteTurnPoint) * kIgniteMaxRadius;
+      } else {
+        // Drawn back in quickly at first and then slowly, so the flood is gone
+        // almost at once but the last of it lingers over the icon and settles
+        // there. An in_out curve here instead leaves the panel flat and full
+        // for a third of the event while the drain gets going.
+        const float q = (p - kIgniteTurnPoint) / (1.0f - kIgniteTurnPoint);
+        r = (1.0f - ease::out_cubic(q)) * kIgniteMaxRadius;
+      }
+
+      // The flood dims as it is drawn back in, so the last thing to leave is
+      // the icon rather than a bright disc sitting on top of the new screen.
+      //
+      // A full-panel flood is the highest-power frame the UI ever draws: 192
+      // LEDs of saturated colour. The cap in Renderer::render already bounds
+      // it, so at high brightness this visibly dims rather than browning out
+      // the supply. That is the cap doing its job, not a bug in the flourish.
+      const float field_k = drawing_in ? 0.35f + 0.65f * (r / kIgniteMaxRadius) : 1.0f;
+      const RGB field = accent.scaled(static_cast<uint8_t>(field_k * 255.0f + 0.5f));
+      const RGB rim = lerp_rgb(accent, RGB(255, 255, 255), 0.75f);
+
+      for (int y = 0; y < kHeight; ++y) {
+        for (int x = 0; x < kWidth; ++x) {
+          const float dx = static_cast<float>(x) - kIgniteOriginX;
+          const float dy = (static_cast<float>(y) - kIgniteOriginY) * 1.6f;
+          // The rows are stretched because eight of them against twenty-four
+          // columns would otherwise make the front an ellipse that reaches the
+          // top and bottom edges almost at once, and the expansion would read
+          // as a vertical wipe instead of something circular.
+          const float d = std::sqrt(dx * dx + dy * dy);
+
+          if (d < r - 0.5f) {
+            out.set(x, y, field);
+          } else {
+            // Ahead of the front: the old screen on the way out, the new one
+            // on the way back in.
+            const RGB under = drawing_in ? to.get(x, y) : from.get(x, y);
+            if (drawing_in) {
+              out.set(x, y, under);
+            } else {
+              // Dim what the front has not reached yet, so the panel is not
+              // brightest where nothing is happening.
+              const float k = 1.0f - 0.55f * ease::out_cubic(p / kIgniteTurnPoint);
+              out.set(x, y, under.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f)));
+            }
+          }
+
+          // The front itself, a soft bright shell one pixel or so thick.
+          // Not drawn at zero radius: at the two endpoints the composite has to
+          // be exactly the old or the new screen, with nothing added on top.
+          const float e = d - r;
+          if (r > 0.05f && e > -1.4f && e < 0.9f) {
+            const float w = 1.0f - std::fabs(e + 0.25f) / 1.15f;
+            if (w > 0.0f) out.add_scaled(x, y, rim, w * w);
+          }
+        }
       }
       break;
     }
