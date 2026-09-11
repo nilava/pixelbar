@@ -95,11 +95,22 @@ were observed on the bench:
 Powering `+` from 3V3 puts strong 10 kΩ pull-ups on all three lines and makes
 the coupling node a supply rail instead of an antenna.
 
-The bare EC11 the enclosure is modelled around has no power pin at all: it is
-just the switch and the two contacts, with no resistors to feed, so on the
-final build the internal pull-ups are the whole story and there is nothing to
-connect. The 3V3 wire is needed only while the encoder is still on its
-breakout board.
+### Once the encoder is off the breakout board
+
+The 3V3 wire is needed only while the module is still in the circuit. A bare
+EC11 is the switch and the two contacts and nothing else — no resistors, so no
+shared node for the three lines to couple through. The fault above is removed
+along with the board it lived on, and the internal pull-ups hold all three
+lines by themselves. There is no `+` to connect, and nothing is lost.
+
+One thing worth doing anyway, because it is three resistors and it closes a
+question that will otherwise only open once everything is glued into a case:
+**fit 10 kΩ pull-ups from `A`, `B` and `SW` to 3V3.** The internal pull-ups are
+around 45 kΩ, which is weak enough that a high-impedance line picks up noise
+from its surroundings — and the surroundings here are 192 WS2812s switching a
+few centimetres away on wires that are longer in the assembled case than on the
+bench. That is a different mechanism from the coupling fault above and it will
+not show up until assembly, which is the worst time to find it.
 
 ### If the direction comes out backwards
 
