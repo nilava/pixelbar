@@ -54,6 +54,13 @@ typedef struct {
   float fps;
   int32_t detents;
   uint32_t illegal;
+  // Where the panel is in whatever list it is showing, and what the setting
+  // under the cursor reads as. Both are for seeing the panel from somewhere
+  // other than in front of it — which is the only way to tell a menu that did
+  // not move from one that moved and came back.
+  int16_t menu_index;
+  char set_label[8];
+  char set_text[16];
 } net_status_t;
 
 // What the device is doing about the network. The panel draws a different

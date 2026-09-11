@@ -236,6 +236,11 @@ extern "C" void app_main(void) {
       ns.fps = meter.fps();
       ns.detents = ports.encoder_detents();
       ns.illegal = ports.encoder_illegal();
+      ns.menu_index = static_cast<int16_t>(app.state().menu_index);
+      snprintf(ns.set_label, sizeof(ns.set_label), "%s",
+               app.state().set_label ? app.state().set_label : "");
+      snprintf(ns.set_text, sizeof(ns.set_text), "%s",
+               app.state().set_text ? app.state().set_text : "");
       net_publish(&ns);
     }
 

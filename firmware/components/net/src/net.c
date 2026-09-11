@@ -390,16 +390,18 @@ static esp_err_t get_state(httpd_req_t* r) {
     localtime_r(&now, &tm);
     snprintf(clock, sizeof(clock), "%02d:%02d", tm.tm_hour, tm.tm_min);
   }
-  char buf[360];
+  char buf[440];
   const int n = snprintf(
       buf, sizeof(buf),
       "{\"screen\":\"%s\",\"status\":\"%s\",\"brightness\":%u,"
       "\"timer_left\":%d,\"timer_running\":%s,\"fps\":%.1f,"
       "\"detents\":%ld,\"illegal\":%lu,\"ip\":\"%s\","
-      "\"clock\":\"%s\"}",
+      "\"clock\":\"%s\",\"menu_index\":%d,"
+      "\"set_label\":\"%s\",\"set_text\":\"%s\"}",
       s_status.screen, s_status.status, s_status.brightness, s_status.timer_left_s,
       s_status.timer_running ? "true" : "false", s_status.fps,
-      (long)s_status.detents, (unsigned long)s_status.illegal, s_ip, clock);
+      (long)s_status.detents, (unsigned long)s_status.illegal, s_ip, clock,
+      (int)s_status.menu_index, s_status.set_label, s_status.set_text);
   httpd_resp_set_type(r, "application/json");
   return httpd_resp_send(r, buf, n);
 }

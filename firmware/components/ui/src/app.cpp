@@ -472,13 +472,19 @@ void App::adjust(int detents, float rate) {
       int v = ui_.brightness + d * 4;
       if (v < panel::kMinBrightness) v = panel::kMinBrightness;
       if (v > 255) v = 255;
-      ui_.brightness = static_cast<uint8_t>(v);
+      // Into the struct, then out to the live state — the same way round as
+      // every other setting. Writing only UiState, as this did, is how the
+      // timer length came to be forgotten at every power cut; brightness and
+      // hue had the identical bug and it was never noticed because the
+      // defaults happen to be close to what anyone picks.
+      set_.brightness = static_cast<uint8_t>(v);
+      apply_settings();
       note_change();
       break;
     }
     case Screen::ColorPick: {
-      ui_.hue = panel::wrap01(ui_.hue + d * 0.02f);
-      ui_.accent = panel::accent_from_hue(ui_.hue);
+      set_.hue = panel::wrap01(set_.hue + d * 0.02f);
+      apply_settings();
       note_change();
       break;
     }
