@@ -27,6 +27,19 @@ constexpr float kMaxMilliamps = 2500.0f;
 // is just where the panel starts.
 constexpr uint8_t kDefaultBrightness = 48;
 
-constexpr int kFramesPerSecond = 60;
+// 100 fps, chosen because 1000 % 100 == 0: the 1 ms FreeRTOS tick paces it
+// exactly, with no drift accumulator. The previous value of 60 was silently
+// running at 62.5, because pdMS_TO_TICKS(1000/60) truncates to 16.
+constexpr int kFramesPerSecond = 100;
+constexpr int kFramePeriodUs = 1000000 / kFramesPerSecond;
+
+static_assert(1000 % kFramesPerSecond == 0,
+              "pick a frame rate that divides 1000 so the 1 ms tick paces it exactly");
+
+// One frame on the wire: 192 LEDs x 24 bits x 1.2 us, plus the 280 us reset.
+constexpr float kWireTimeMs = 5.81f;
+static_assert(1000.0f / kFramesPerSecond > kWireTimeMs,
+              "the frame period is shorter than the time it takes to clock a "
+              "frame out; the panel cannot keep up");
 
 }  // namespace panel

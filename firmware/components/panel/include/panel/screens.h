@@ -5,7 +5,9 @@
 #pragma once
 #include <cstdint>
 
+#include "panel/anim.h"
 #include "panel/color.h"
+#include "panel/digit_roll.h"
 #include "panel/framebuffer.h"
 
 namespace panel {
@@ -50,6 +52,30 @@ struct UiState {
   bool wifi_connected = false;
 };
 
+// The icon occupies columns 0..7, column 8 is a gutter that is never written,
+// and the label box is columns 9..23.
+constexpr int kIconX = 0;
+constexpr int kGutterX = 8;
+constexpr int kLabelX = 9;
+
+// Per-screen animation state: digit rolls and the values that glide toward
+// their targets. A screen cannot be a pure function of time and also ease
+// toward a value that changed at an arbitrary moment, so this is its memory.
+struct ScreenAnim {
+  PairFaceAnim face;
+  Smoothed bar{0.0f, 0.12f};
+  Smoothed cursor{0.0f, 0.08f};
+  Smoothed rays{0.0f, 0.12f};
+  SmoothedRGB tint;
+  bool primed = false;
+};
+
+// The animated draw. Everything on every screen is in continuous motion.
+void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
+                 ScreenAnim& sa);
+
+// Still form, kept so existing callers and tests compile. Uses a scratch
+// ScreenAnim, so anything eased is drawn already settled.
 void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, uint32_t now_ms);
 
 // Layout helpers, shared with the pattern set and exercised by the tests.
@@ -63,6 +89,11 @@ void draw_clock_face(Framebuffer& fb, int hour, int minute, bool show_colon, RGB
 
 // A horizontal bar across rows y0..y1 inclusive, filled left to right.
 void draw_bar(Framebuffer& fb, int y0, int y1, float fraction, RGB on, RGB off);
+
+// The same bar with a sub-pixel right edge: at fraction 0.517 the boundary LED
+// is lit about 40% of the way from off to on, so the bar moves continuously
+// instead of snapping between 24 positions.
+void draw_bar_aa(Framebuffer& fb, int y0, int y1, float fraction, RGB on, RGB off);
 
 // Right-aligned fixed-width number in 3x5 digits. Leading zeros are dropped.
 void draw_tiny_number(Framebuffer& fb, int x, int y, int value, int digits, RGB color);

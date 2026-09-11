@@ -52,11 +52,18 @@ bool text_fits(const char* s);
 // Draws horizontally centred. Returns the x it started at.
 int draw_text_centered(Framebuffer& fb, int y, const char* s, RGB color);
 
+// Sub-pixel variants. A glyph drawn at a fractional x splits each ink column
+// across the two LEDs it straddles, so scrolling text glides instead of
+// stepping one whole LED at a time. Returns the advance width.
+float draw_char_aa(Framebuffer& fb, float x, int y, char c, RGB color);
+float draw_text_aa(Framebuffer& fb, float x, int y, const char* s, RGB color);
+
 // 3x5 digits, '0'..'9'. Returns nullptr otherwise. 5 rows, bit 2 leftmost.
 const uint8_t* tiny_digit(char c);
 constexpr int kTinyW = 3;
 constexpr int kTinyH = 5;
 
 void draw_tiny_digit(Framebuffer& fb, int x, int y, char c, RGB color);
+void draw_tiny_digit_aa(Framebuffer& fb, float x, int y, char c, RGB color);
 
 }  // namespace panel

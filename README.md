@@ -7,14 +7,13 @@ input from three hidden touch zones and a rotary encoder.
 The panel is three 65 mm 8×8 WS2812B boards butted edge to edge inside a
 snap-fit printed case, behind a per-LED light grid and a diffuser.
 
-![scrolling text](docs/preview/text.png)
+![status screens](docs/screens/status.png)
 
 ## Status
 
-**Step 1 of the firmware is done: the display layer and the screens.**
-Framebuffer, LED mapping, proportional font, patterns, the UI screens, gamma
-and the power cap are unit tested on the host, and the ESP32-C3 image builds
-and is ready to flash.
+**The display layer is done, and it is animated.** Icons, a mini font, screen
+transitions and continuous motion at 100 fps, all unit tested on the host with
+the ESP32-C3 image building and ready to flash.
 
 None of it has run on real LEDs yet, because the boards are not built. The
 first job once they are is the mapping calibration below.
@@ -46,21 +45,57 @@ The status words are each 23 px wide in the proportional font, so they sit
 still and centred rather than scrolling. Anything wider than the panel scrolls
 automatically.
 
-![status screens](docs/screens/status.png)
-
-FREE, BUSY, CALL and DND. CALL pulses gently, because it is the one status
-that means "not even a quick question".
+An 8x8 icon, a one pixel gutter, and the label in a 3x5 mini font: exactly 24
+columns, so a status word never scrolls. FREE is an open ring and BUSY is the
+same ring filled in, which is what makes the change between them read as the
+ring solidifying.
 
 | | |
 | --- | --- |
-| ![timer](docs/screens/timer.png) | ![colour picker](docs/screens/colorpick.png) |
+| ![free](docs/anim/status-free.gif) | ![call](docs/anim/status-call.gif) |
+| ![timer](docs/anim/timer.gif) | ![colour picker](docs/anim/colorpick.gif) |
 
-The focus timer counts down with a progress bar, turns red in the last minute
-and blinks while paused. The colour picker is a hue ramp you scrub with the
-knob. Brightness and timer length share a number-plus-bar layout.
+Everything moves. Icons breathe, CALL animates its handset and pulses harder
+because it is the one status that must interrupt you, the clock's second hand
+walks the panel's 60-pixel perimeter, timer digits roll, bars glide to their
+targets, and the colour picker has a specular band travelling its ramp.
 
-Every screen is a pure function of `UiState` and the clock, so the state
-machine can be built and tested without touching the drawing code.
+## Transitions
+
+The motion is semantic: it tells you what kind of move just happened.
+
+| | |
+| --- | --- |
+| ![slide](docs/anim/trans-slide.gif) | ![dissolve](docs/anim/trans-dissolve.gif) |
+
+| Gesture | Motion |
+| --- | --- |
+| Moving through the view cycle | Slides sideways |
+| Opening an adjust screen | Wipes up, like a drawer |
+| A status change | Dissolves, pixel by pixel |
+| Sleeping or waking | Fades through black |
+
+Both screens keep animating for the whole transition, and the outgoing one
+keeps the state it had when the move began, so a status change dissolves from
+the old word into the new one rather than flipping instantly.
+
+## What makes it smooth
+
+More animation on its own would have looked stepped, because the pipeline
+quantised motion in six separate places. Fixing those was most of the work.
+
+| Was | Now |
+| --- | --- |
+| 62.5 fps, from `pdMS_TO_TICKS(1000/60)` truncating to 16 | 100 fps, which divides the 1 kHz tick exactly |
+| `dt` rounded to 1 ms | microseconds, so a 10 ms frame is not quantised by 10% |
+| Text jumped a whole LED every 83 ms | sub-pixel, the boundary LED lights partially |
+| Bars snapped to 24 positions | anti-aliased, continuous at any fraction |
+| Gamma table stopped at 236 | reaches 255, recovering the top 7.5% of range |
+| ~44 brightness levels, so a 4 s fade held each for 9 frames | temporal dithering carries the remainder between frames |
+| Output blocked the loop for 5.8 ms | queued, so the next frame draws while it clocks out |
+
+The ESP32-C3 has no FPU, so `sinf` is emulated in software and plasma alone
+wanted 576 of them per frame. Trigonometry is a 256-entry table.
 
 ## Hardware
 
@@ -121,10 +156,16 @@ The whole drawing layer is free of ESP-IDF, so it builds and runs on a laptop.
 
 ```bash
 ./test/run.sh                                    # builds and runs the tests
-./build-host/preview docs/preview docs/screens   # renders patterns and screens
+./build-host/preview docs/preview docs/screens   # still sheets
 python3 tools/ppm2png.py docs/preview
 python3 tools/ppm2png.py docs/screens
+
+./build-host/preview --anim docs/anim            # animated clips
+python3 tools/ppm2gif.py docs/anim               # needs Pillow
 ```
+
+A still image cannot show whether motion is smooth, so the animation is
+verified by watching the GIFs rather than by reading a description of them.
 
 The preview reads back the same GRB bytes that would go out on the wire,
 through the same mapping, so a gamma or mapping mistake shows up on screen
@@ -133,6 +174,8 @@ instead of on a soldered panel.
 | | |
 | --- | --- |
 | ![clock](docs/preview/clock.png) | ![plasma](docs/preview/plasma.png) |
+
+The ambient patterns are still there as a screensaver.
 
 ## Power
 
@@ -144,7 +187,8 @@ enforced in the render path, not in the patterns, so no pattern can exceed it.
 ## Layout
 
 ```
-firmware/components/panel/   framebuffer, mapping, font, patterns, screens (no IDF deps)
+firmware/components/panel/   framebuffer, mapping, fonts, icons, patterns,
+                             screens, transitions, animation (no IDF deps)
 firmware/components/ws2812/  WS2812B over RMT, no external components
 firmware/main/               app_main, GPIO map
 test/                        host-side tests

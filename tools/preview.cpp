@@ -15,7 +15,9 @@
 #include "panel/config.h"
 #include "panel/framebuffer.h"
 #include "panel/patterns.h"
+#include "panel/renderer.h"
 #include "panel/screens.h"
+#include "panel/transition.h"
 
 using namespace panel;
 
@@ -251,9 +253,157 @@ void render_screen_sheet(Screen s, const std::string& dir) {
   }
 }
 
+// ---------------------------------------------------------------- animation
+//
+// Writes a clip as concatenated P6 frames in one file, with the frame rate in
+// a leading comment. Still images cannot show whether motion is smooth, and
+// that is the whole point of this work.
+
+constexpr int kAnimFps = 25;          // 40 ms, which GIF can express exactly
+constexpr int kAnimPitch = 8;         // smaller cells: these files go in git
+constexpr int kAnimCell = 7;
+
+void draw_frame_small(Image& img, const uint8_t* grb, int ox, int oy) {
+  for (int y = 0; y < kHeight; ++y) {
+    for (int x = 0; x < kWidth; ++x) {
+      const int i = led_index(x, y, kWiring) * 3;
+      const float g = grb[i + 0], r = grb[i + 1], b = grb[i + 2];
+      for (int dy = 0; dy < kAnimCell; ++dy)
+        for (int dx = 0; dx < kAnimCell; ++dx)
+          img.set(ox + x * kAnimPitch + dx, oy + y * kAnimPitch + dy, r, g, b);
+    }
+  }
+}
+
+// What a clip does on each frame. Returns the screen to show.
+struct Clip {
+  const char* name;
+  Screen screen;
+  Status status;
+  float seconds;
+  // Optional screen change part way through, to capture a transition.
+  Screen go_to = Screen::Count;
+  float go_at = -1.0f;
+  TransitionKind kind = TransitionKind::None;
+  // For a dissolve, the status the panel changes to at the same moment.
+  Status status_after = Status::Count;
+};
+
+void render_clip(const Clip& c, const std::string& dir) {
+  const int fw = kWidth * kAnimPitch + 2 * kMargin;
+  const int fh = kHeight * kAnimPitch + 2 * kMargin;
+  const int frames = static_cast<int>(c.seconds * kAnimFps);
+
+  ScreenManager mgr;
+  mgr.set_screen(c.screen);
+  UiState ui;
+  ui.accent = RGB(255, 138, 31);
+  ui.status = c.status;
+  ui.hour = 14;
+  ui.minute = 25;
+  ui.brightness = 178;
+  ui.timer_total_s = 25 * 60;
+  ui.timer_left_s = 25 * 60;
+  ui.timer_running = true;
+  ui.timer_set_min = 25;
+  ui.hue = 0.08f;
+
+  Framebuffer fb;
+  Renderer ren;
+  uint8_t grb[kNumLeds * 3];
+  const std::string path = dir + "/" + c.name + ".ppms";
+  FILE* f = std::fopen(path.c_str(), "wb");
+  if (!f) {
+    std::printf("  FAILED to open %s\n", path.c_str());
+    return;
+  }
+
+  FrameClock clock;
+  micros_t t = 0;
+  bool fired = false;
+  for (int i = 0; i < frames; ++i) {
+    const float secs = static_cast<float>(i) / kAnimFps;
+    if (!fired && c.go_at >= 0.0f && secs >= c.go_at) {
+      fired = true;
+      if (c.status_after != Status::Count) ui.status = c.status_after;
+      if (c.kind == TransitionKind::None) {
+        mgr.go_to(c.go_to);
+      } else if (c.go_to == mgr.current()) {
+        mgr.restart_with(c.kind, 0.3f);  // a change in place, not a new screen
+      } else {
+        mgr.go_to(c.go_to, c.kind);
+      }
+    }
+    // A live second hand and a counting timer, so the clips show real motion.
+    ui.second = static_cast<int>(secs) % 60;
+    ui.timer_left_s = 25 * 60 - static_cast<int>(secs * 30.0f);
+    ui.hue = 0.08f + secs * 0.05f;
+    if (ui.hue > 1.0f) ui.hue -= 1.0f;
+
+    const Anim a = clock.tick(t);
+    mgr.render(fb, ui, a);
+    ren.render(fb, grb, kPreviewBrightness, kMaxMilliamps, kWiring);
+
+    Image img(fw, fh);
+    draw_frame_small(img, grb, kMargin, kMargin);
+    const std::vector<float> halo = blur(img.px, img.w, img.h, 3);
+    for (size_t k = 0; k < img.px.size(); ++k) img.px[k] += halo[k] * kGlow;
+    for (int y = 0; y < img.h; ++y)
+      for (int x = 0; x < img.w; ++x) {
+        const size_t k = (static_cast<size_t>(y) * img.w + x) * 3;
+        img.px[k] += 11; img.px[k + 1] += 13; img.px[k + 2] += 16;
+      }
+
+    if (i == 0) std::fprintf(f, "# fps %d\n", kAnimFps);
+    std::fprintf(f, "P6\n%d %d\n255\n", img.w, img.h);
+    std::vector<uint8_t> row(static_cast<size_t>(img.w) * 3);
+    for (int y = 0; y < img.h; ++y) {
+      for (int x = 0; x < img.w * 3; ++x) {
+        float v = img.px[(static_cast<size_t>(y) * img.w * 3) + x];
+        if (v < 0) v = 0;
+        if (v > 255) v = 255;
+        row[x] = static_cast<uint8_t>(v + 0.5f);
+      }
+      std::fwrite(row.data(), 1, row.size(), f);
+    }
+    t += 1000000 / kAnimFps;
+  }
+  std::fclose(f);
+  std::printf("  %s  %d frames\n", path.c_str(), frames);
+}
+
+void render_all_clips(const std::string& dir) {
+  const Clip clips[] = {
+      {"status-free", Screen::Status, Status::Free, 3.0f},
+      {"status-busy", Screen::Status, Status::Busy, 3.0f},
+      {"status-call", Screen::Status, Status::Call, 3.0f},
+      {"status-dnd", Screen::Status, Status::Dnd, 3.0f},
+      {"clock", Screen::Clock, Status::Free, 4.0f},
+      {"timer", Screen::Timer, Status::Busy, 4.0f},
+      {"colorpick", Screen::ColorPick, Status::Free, 4.0f},
+      {"sleep", Screen::Sleep, Status::Free, 4.0f},
+      {"booting", Screen::Booting, Status::Free, 3.0f},
+      {"trans-slide", Screen::Status, Status::Busy, 2.0f, Screen::Clock, 0.6f},
+      {"trans-wipe", Screen::Timer, Status::Busy, 2.0f, Screen::Brightness, 0.6f},
+      {"trans-fade", Screen::Status, Status::Busy, 2.5f, Screen::Sleep, 0.7f},
+      // FREE turning into BUSY: the ring solidifying into a disc is the whole
+      // reason the two icons share a silhouette.
+      {"trans-dissolve", Screen::Status, Status::Free, 2.2f, Screen::Status, 0.6f,
+       TransitionKind::Dissolve, Status::Busy},
+  };
+  for (const Clip& c : clips) render_clip(c, dir);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+  // --anim writes animated clips instead of still sheets.
+  if (argc > 1 && std::string(argv[1]) == "--anim") {
+    const std::string dir = (argc > 2) ? argv[2] : "docs/anim";
+    std::printf("clips into %s\n", dir.c_str());
+    render_all_clips(dir);
+    return 0;
+  }
   const std::string pdir = (argc > 1) ? argv[1] : "docs/preview";
   const std::string sdir = (argc > 2) ? argv[2] : "docs/screens";
   std::printf("patterns into %s\n", pdir.c_str());

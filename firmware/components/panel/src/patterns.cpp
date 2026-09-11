@@ -65,18 +65,10 @@ void Engine::set_text(const char* s) {
   scroll_ = 0.0f;
 }
 
-void Engine::render(Framebuffer& fb, uint32_t now_ms) {
-  float dt = 0.0f;
-  if (!started_) {
-    started_ = true;
-  } else {
-    // Unsigned subtraction handles the 49-day wrap of a millisecond counter.
-    const uint32_t elapsed = now_ms - last_ms_;
-    dt = static_cast<float>(elapsed) / 1000.0f;
-    if (dt > 0.25f) dt = 0.25f;  // a long stall should not jump the animation
-  }
-  last_ms_ = now_ms;
-  const float sdt = dt * params.speed;
+void Engine::render_us(Framebuffer& fb, micros_t now_us) {
+  // FrameClock handles the first frame, the 32-bit wrap and the stall clamp.
+  const Anim a = clock_.tick(now_us);
+  const float sdt = a.dt * params.speed;
   t_ += sdt;
   scroll_ += sdt * kScrollPxPerSec;
 

@@ -2,6 +2,12 @@ idf_component_register(
     SRCS "src/color.cpp"
          "src/framebuffer.cpp"
          "src/font.cpp"
+         "src/anim.cpp"
+         "src/digit_roll.cpp"
+         "src/icons.cpp"
+         "src/mini_font.cpp"
          "src/patterns.cpp"
+         "src/renderer.cpp"
          "src/screens.cpp"
+         "src/transition.cpp"
     INCLUDE_DIRS "include")

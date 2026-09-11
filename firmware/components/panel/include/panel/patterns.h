@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 
+#include "panel/anim.h"
 #include "panel/color.h"
 #include "panel/framebuffer.h"
 
@@ -61,8 +62,15 @@ class Engine {
   Pattern pattern() const { return pat_; }
   void set_text(const char* s);
 
-  // Advances animation state to now_ms and draws one frame.
-  void render(Framebuffer& fb, uint32_t now_ms);
+  // Advances animation state and draws one frame.
+  //
+  // Microseconds, not milliseconds: at 100 fps a 1 ms quantisation is 10% of
+  // the frame, which shows up as jitter in anything velocity-driven.
+  void render_us(Framebuffer& fb, micros_t now_us);
+
+  // Millisecond shim. Multiplying by 1000 preserves deltas modulo 2^32 for any
+  // interval under 71 minutes, so wrap behaviour is unchanged.
+  void render(Framebuffer& fb, uint32_t now_ms) { render_us(fb, now_ms * 1000u); }
 
   // Scroll offset in pixels, exposed for tests.
   float scroll_px() const { return scroll_; }
@@ -80,8 +88,7 @@ class Engine {
   void draw_maptest(Framebuffer& fb);
 
   Pattern pat_ = Pattern::Text;
-  bool started_ = false;
-  uint32_t last_ms_ = 0;
+  FrameClock clock_;
   float t_ = 0.0f;       // animation seconds
   float scroll_ = 0.0f;  // text scroll offset in pixels
   float sparks_[kNumLeds] = {0};

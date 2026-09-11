@@ -183,6 +183,42 @@ int draw_text_centered(Framebuffer& fb, int y, const char* s, RGB color) {
   return x;
 }
 
+float draw_char_aa(Framebuffer& fb, float x, int y, char c, RGB color) {
+  const Glyph* g = glyph_for(c);
+  if (!g) return kSpaceAdvance;
+  const int left = left_edge(*g);
+  if (left < 0) return kSpaceAdvance;
+  const int w = glyph_width(*g);
+  for (int row = 0; row < kGlyphH; ++row) {
+    for (int col = left; col < left + w; ++col) {
+      if (g->rows[row] & (1 << (kGlyphW - 1 - col))) {
+        // Add, not Over: neighbouring ink columns write complementary weights
+        // into the shared LED and must sum, or a solid stroke dims as it moves.
+        fb.set_aa(x + (col - left), y + row, color, 1.0f, Blend::Add);
+      }
+    }
+  }
+  return static_cast<float>(w + kCharGap);
+}
+
+float draw_text_aa(Framebuffer& fb, float x, int y, const char* s, RGB color) {
+  float cx = x;
+  for (; s && *s; ++s) cx += draw_char_aa(fb, cx, y, *s, color);
+  return cx - x;
+}
+
+void draw_tiny_digit_aa(Framebuffer& fb, float x, int y, char c, RGB color) {
+  const uint8_t* d = tiny_digit(c);
+  if (!d) return;
+  for (int row = 0; row < kTinyH; ++row) {
+    for (int col = 0; col < kTinyW; ++col) {
+      if (d[row] & (1 << (kTinyW - 1 - col))) {
+        fb.set_aa(x + col, y + row, color, 1.0f, Blend::Add);
+      }
+    }
+  }
+}
+
 const uint8_t* tiny_digit(char c) {
   if (c < '0' || c > '9') return nullptr;
   return kTiny[c - '0'];

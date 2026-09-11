@@ -24,6 +24,7 @@ struct ws2812_strip {
   rmt_encoder_handle_t encoder;
   int led_count;
   uint8_t* buf;  // scratch for ws2812_clear
+  bool busy;     // a frame is on the wire
 };
 
 // ---------------------------------------------------------------- encoder
@@ -169,14 +170,29 @@ fail:
   return err;
 }
 
-esp_err_t ws2812_write(ws2812_handle_t h, const uint8_t* grb) {
+esp_err_t ws2812_write_async(ws2812_handle_t h, const uint8_t* grb) {
   ESP_RETURN_ON_FALSE(h && grb, ESP_ERR_INVALID_ARG, TAG, "bad args");
   const rmt_transmit_config_t tx_cfg = {.loop_count = 0};
   ESP_RETURN_ON_ERROR(
       rmt_transmit(h->channel, h->encoder, grb, (size_t)h->led_count * 3, &tx_cfg),
       TAG, "transmit failed");
-  // Wait for the frame to finish so the caller can reuse its buffer safely.
-  return rmt_tx_wait_all_done(h->channel, 100);
+  h->busy = true;
+  return ESP_OK;
+}
+
+esp_err_t ws2812_wait(ws2812_handle_t h, int timeout_ms) {
+  ESP_RETURN_ON_FALSE(h, ESP_ERR_INVALID_ARG, TAG, "bad args");
+  if (!h->busy) return ESP_OK;
+  const esp_err_t err = rmt_tx_wait_all_done(h->channel, timeout_ms);
+  if (err == ESP_OK) h->busy = false;
+  return err;
+}
+
+bool ws2812_busy(ws2812_handle_t h) { return h && h->busy; }
+
+esp_err_t ws2812_write(ws2812_handle_t h, const uint8_t* grb) {
+  ESP_RETURN_ON_ERROR(ws2812_write_async(h, grb), TAG, "queue failed");
+  return ws2812_wait(h, 100);
 }
 
 esp_err_t ws2812_clear(ws2812_handle_t h) {
@@ -187,6 +203,7 @@ esp_err_t ws2812_clear(ws2812_handle_t h) {
 
 void ws2812_del(ws2812_handle_t h) {
   if (!h) return;
+  ws2812_wait(h, 100);
   rmt_disable(h->channel);
   rmt_del_encoder(h->encoder);
   rmt_del_channel(h->channel);

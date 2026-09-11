@@ -2,19 +2,16 @@
 
 #include <cmath>
 
+#include "panel/anim.h"
 #include "panel/font.h"
+#include "panel/icons.h"
+#include "panel/mini_font.h"
 
 namespace panel {
 namespace {
 
 constexpr int kTinyAdvance = kTinyW + 1;  // digit plus its gap
 constexpr int kColonWidth = 2;
-
-// 0..1 triangle-free sine, used for gentle pulses.
-float pulse(uint32_t now_ms, float period_s) {
-  const float t = static_cast<float>(now_ms % static_cast<uint32_t>(period_s * 1000.0f));
-  return 0.5f + 0.5f * std::sin(t / (period_s * 1000.0f) * 6.28318f);
-}
 
 }  // namespace
 
@@ -37,6 +34,22 @@ RGB status_color(Status s) {
     default: return RGB(120, 120, 120);
   }
 }
+
+namespace {
+
+// A sheen that crosses the label area now and then: enough motion to read as
+// alive from across a room, not enough to pull your eye off a monitor.
+void sheen(Framebuffer& fb, const Anim& a, int row, int x0, int x1, RGB c, float period_s) {
+  const float p = a.phase(period_s);
+  if (p > 0.45f) return;  // travels for part of the cycle, then rests
+  const float head = x0 + (p / 0.45f) * (x1 - x0 + 4) - 2.0f;
+  for (int k = 0; k < 3; ++k) {
+    const float w = 1.0f - k * 0.33f;
+    fb.set_aa(head - k, row, c, 0.12f * w, Blend::Add);
+  }
+}
+
+}  // namespace
 
 const char* screen_name(Screen s) {
   switch (s) {
@@ -76,6 +89,20 @@ void draw_bar(Framebuffer& fb, int y0, int y1, float fraction, RGB on, RGB off) 
   }
 }
 
+void draw_bar_aa(Framebuffer& fb, int y0, int y1, float fraction, RGB on, RGB off) {
+  if (fraction < 0.0f) fraction = 0.0f;
+  if (fraction > 1.0f) fraction = 1.0f;
+  const float edge = fraction * kWidth;
+  for (int y = y0; y <= y1; ++y) {
+    for (int x = 0; x < kWidth; ++x) {
+      float cov = edge - x;
+      if (cov < 0.0f) cov = 0.0f;
+      if (cov > 1.0f) cov = 1.0f;
+      fb.set(x, y, lerp_rgb(off, on, cov));
+    }
+  }
+}
+
 void draw_pair_face(Framebuffer& fb, int left, int right, bool show_colon, RGB color) {
   // Each group is clamped, not wrapped: a 25 minute timer must read 25, and
   // wrapping it into a 24 hour clock would show 01.
@@ -100,93 +127,203 @@ void draw_clock_face(Framebuffer& fb, int hour, int minute, bool show_colon, RGB
   draw_pair_face(fb, ((hour % 24) + 24) % 24, ((minute % 60) + 60) % 60, show_colon, color);
 }
 
-void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, uint32_t now_ms) {
+const Icon& status_icon(Status s) {
+  switch (s) {
+    case Status::Free: return kIconFree;
+    case Status::Busy: return kIconBusy;
+    case Status::Dnd: return kIconDnd;
+    default: return kIconFree;
+  }
+}
+
+void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
+                 ScreenAnim& sa) {
   fb.clear();
+  const float dt = a.dt;
+
   switch (s) {
     case Screen::Status: {
-      RGB c = status_color(ui.status);
-      // CALL pulses gently: it is the one status that means "not even a quick
-      // question", and movement carries further than colour alone.
-      if (ui.status == Status::Call) {
-        const float k = 0.65f + 0.35f * pulse(now_ms, 2.0f);
-        c = c.scaled(static_cast<uint8_t>(k * 255.0f));
+      const RGB base = status_color(ui.status);
+      if (!sa.primed) {
+        sa.tint.snap(base);
+        sa.primed = true;
       }
-      draw_text_centered(fb, 0, status_label(ui.status), c);
+      sa.tint.set_target(base);
+      const RGB c = sa.tint.update(dt);
+
+      // Every status breathes; CALL also animates its icon and pulses harder,
+      // because it is the one that must interrupt you.
+      const bool urgent = (ui.status == Status::Call);
+      const float depth = urgent ? 0.35f : 0.12f;
+      const float period = urgent ? 1.6f : 4.0f;
+      const float k = (1.0f - depth) + depth * a.wave(period);
+      const RGB lit = c.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
+
+      if (urgent) {
+        draw_anim_icon(fb, kIconX, 0, kAnimCall, a.t, lit);
+      } else {
+        draw_icon(fb, kIconX, 0, status_icon(ui.status), lit);
+      }
+      mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, status_label(ui.status), lit);
+      sheen(fb, a, 7, kLabelX, kWidth - 1, c, 6.0f);
       break;
     }
 
-    case Screen::Clock:
-      draw_clock_face(fb, ui.hour, ui.minute, ui.second % 2 == 0, ui.accent);
-      draw_bar(fb, kHeight - 1, kHeight - 1, ui.second / 60.0f, ui.accent.scaled(90),
-               RGB(0, 0, 0));
+    case Screen::Clock: {
+      draw_pair_face_anim(fb, sa.face, ui.hour, ui.minute, true, ui.accent, a.t);
+      // The seconds hand walks the perimeter: 24+24+6+6 is exactly 60 cells,
+      // one per second, and it never crosses the digits.
+      const float secs = ui.second + a.phase(1.0f);
+      const float pos = secs;
+      auto perim = [](float i, float* x, float* y) {
+        if (i < 24) { *x = i; *y = 0; }
+        else if (i < 30) { *x = 23; *y = i - 24 + 1; }
+        else if (i < 54) { *x = 23 - (i - 30); *y = 7; }
+        else { *x = 0; *y = 7 - (i - 54) - 1; }
+      };
+      for (int k = 0; k < 3; ++k) {
+        float px, py;
+        float i = pos - k;
+        if (i < 0) i += 60.0f;
+        perim(i, &px, &py);
+        fb.set_aa2(px, py, ui.accent, k == 0 ? 1.0f : 0.25f / k, Blend::Add);
+      }
       break;
+    }
 
     case Screen::Timer: {
       const int left = ui.timer_left_s < 0 ? 0 : ui.timer_left_s;
-      // Under a minute the whole face turns red: that is the cue to wrap up.
       RGB c = (left <= 60) ? RGB(255, 40, 20) : ui.accent;
-      // A paused timer blinks so it is never mistaken for a running one. The
-      // dim phase stays readable rather than going dark, so a paused timer
-      // still shows the time at a glance.
-      if (!ui.timer_running && (now_ms / 500) % 2 == 0) c = c.scaled(70);
-      draw_pair_face(fb, left / 60, left % 60, true, c);
+      // Under a minute the face pulses, and faster in the last ten seconds.
+      if (left <= 60) {
+        const float rate = (left <= 10) ? 0.5f : 1.0f;
+        c = c.scaled(static_cast<uint8_t>((0.55f + 0.45f * a.wave(rate)) * 255.0f));
+      }
+      // A paused timer throbs rather than hard-blinking, so it still reads.
+      if (!ui.timer_running) {
+        c = c.scaled(static_cast<uint8_t>((0.45f + 0.35f * a.wave(1.2f)) * 255.0f));
+      }
+      draw_pair_face_anim(fb, sa.face, left / 60, left % 60, true, c, a.t);
+
       const float done = ui.timer_total_s > 0
                              ? 1.0f - static_cast<float>(left) / ui.timer_total_s
                              : 0.0f;
-      draw_bar(fb, kHeight - 1, kHeight - 1, done, c.scaled(110), RGB(0, 0, 0));
+      if (!sa.primed) { sa.bar.snap(done); sa.primed = true; }
+      sa.bar.set_target(done);
+      const float shown = sa.bar.update(dt);
+      draw_bar_aa(fb, kHeight - 1, kHeight - 1, shown, c.scaled(120), RGB(0, 0, 0));
+      // A brighter head on the bar, so progress reads even when it barely moves.
+      fb.set_aa(shown * kWidth - 0.5f, kHeight - 1, c, 0.8f, Blend::Add);
       break;
     }
 
     case Screen::Brightness: {
+      const float frac = ui.brightness / 255.0f;
+      if (!sa.primed) { sa.bar.snap(frac); sa.rays.snap(frac); sa.primed = true; }
+      sa.bar.set_target(frac);
+      sa.rays.set_target(frac);
+      const float shown = sa.bar.update(dt);
+      const float ray = sa.rays.update(dt);
+
+      draw_icon(fb, kIconX, 0, kIconSunCore, ui.accent);
+      // The rays are the readout: they extend with the value.
+      for (int row = 0; row < kIconH; ++row) {
+        for (int col = 0; col < kIconW; ++col) {
+          if (kIconSunRays.rows[row] & (1 << (kIconW - 1 - col))) {
+            fb.blend(kIconX + col, row, ui.accent, ray);
+          }
+        }
+      }
+      // A glint orbits the ray tips.
+      const float g = a.phase(3.0f) * 4.0f;
+      const int gi = static_cast<int>(g) & 3;
+      const int gx[4] = {3, 7, 4, 0}, gy[4] = {0, 3, 7, 4};
+      fb.set(kIconX + gx[gi], gy[gi], RGB(255, 255, 255));
+
       const int pct = (ui.brightness * 100 + 127) / 255;
-      const int digits = pct >= 100 ? 3 : (pct >= 10 ? 2 : 1);
-      const int x = (kWidth - tiny_number_width(digits)) / 2;
-      draw_tiny_number(fb, x, 0, pct, digits, ui.accent);
-      draw_bar(fb, 6, 7, ui.brightness / 255.0f, ui.accent, ui.accent.scaled(12));
+      char buf[5];
+      int n = 0;
+      if (pct >= 100) buf[n++] = static_cast<char>('0' + pct / 100);
+      if (pct >= 10) buf[n++] = static_cast<char>('0' + (pct / 10) % 10);
+      buf[n++] = static_cast<char>('0' + pct % 10);
+      buf[n++] = '%';
+      buf[n] = 0;
+      mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, buf, ui.accent);
+      draw_bar_aa(fb, 7, 7, shown, ui.accent, ui.accent.scaled(14));
       break;
     }
 
     case Screen::ColorPick: {
-      // A hue ramp you scrub with the knob, with the cursor under the choice.
       for (int x = 0; x < kWidth; ++x) {
         const RGB c = hsv(static_cast<float>(x) / kWidth, 1.0f, 1.0f);
-        for (int y = 0; y <= 5; ++y) fb.set(x, y, c);
+        for (int y = 0; y <= 4; ++y) fb.set(x, y, c);
       }
-      int cursor = static_cast<int>(ui.hue * kWidth + 0.5f);
-      if (cursor < 0) cursor = 0;
-      if (cursor >= kWidth) cursor = kWidth - 1;
-      fb.set(cursor, 7, RGB(255, 255, 255));
-      if (cursor > 0) fb.set(cursor - 1, 7, RGB(60, 60, 60));
-      if (cursor < kWidth - 1) fb.set(cursor + 1, 7, RGB(60, 60, 60));
+      // A specular band travels the ramp so it never looks like a static image.
+      const float band = a.phase(5.0f) * (kWidth + 6) - 3.0f;
+      for (int k = -2; k <= 2; ++k) {
+        fb.set_aa(band + k, 2, RGB(255, 255, 255), 0.22f - 0.07f * (k < 0 ? -k : k),
+                  Blend::Add);
+      }
+      // The selected colour, breathing, under the ramp.
+      const RGB sel = hsv(ui.hue, 1.0f, 1.0f);
+      const float br = 0.7f + 0.3f * a.wave(4.0f);
+      for (int x = 0; x < kWidth; ++x) {
+        fb.set(x, 6, sel.scaled(static_cast<uint8_t>(br * 255.0f)));
+      }
+      // Map onto kWidth-1, not kWidth: at hue 1.0 a cursor at column 24 is
+      // off the panel and draws nothing. The cursor has to reach both ends of
+      // the ramp it is selecting from.
+      const float cursor_x = clamp01(ui.hue) * (kWidth - 1);
+      if (!sa.primed) { sa.cursor.snap(cursor_x); sa.primed = true; }
+      sa.cursor.set_target(cursor_x);
+      const float cx = sa.cursor.update(dt);
+      const float pulse_k = 0.7f + 0.3f * a.wave(1.5f);
+      fb.set_aa(cx, 7, RGB(255, 255, 255), pulse_k, Blend::Add);
       break;
     }
 
     case Screen::TimerSet: {
       const int mins = ui.timer_set_min < 0 ? 0 : ui.timer_set_min;
-      const int digits = mins >= 10 ? 2 : 1;
-      const int x = (kWidth - tiny_number_width(digits)) / 2;
-      draw_tiny_number(fb, x, 0, mins, digits, ui.accent);
-      draw_bar(fb, 6, 7, mins / 60.0f, ui.accent, ui.accent.scaled(12));
+      const float frac = mins / 60.0f;
+      if (!sa.primed) { sa.bar.snap(frac); sa.rays.snap(frac); sa.primed = true; }
+      sa.bar.set_target(frac);
+      sa.rays.set_target(frac);
+      const float shown = sa.bar.update(dt);
+      draw_hourglass(fb, kIconX, 0, sa.rays.update(dt), a.t, ui.accent.scaled(120),
+                     ui.accent);
+      char buf[5];
+      int n = 0;
+      if (mins >= 10) buf[n++] = static_cast<char>('0' + mins / 10);
+      buf[n++] = static_cast<char>('0' + mins % 10);
+      buf[n++] = 'M';
+      buf[n] = 0;
+      mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, buf, ui.accent);
+      draw_bar_aa(fb, 7, 7, shown, ui.accent, ui.accent.scaled(14));
       break;
     }
 
     case Screen::Sleep: {
-      // One dim breathing pixel in the bottom corner: enough to show it is
-      // alive, dark enough to ignore in a dim room.
-      const uint8_t v = static_cast<uint8_t>(2 + 8 * pulse(now_ms, 4.0f));
-      fb.set(0, kHeight - 1, RGB(v, v, v));
+      // Dim, but not so dim it disappears: below a framebuffer value of about
+      // 60 the gamma curve and the default brightness together round the
+      // output to zero, so the old 2..10 breathe never lit an LED at all.
+      const float k = 0.35f + 0.65f * a.wave(6.0f);
+      const uint8_t v = static_cast<uint8_t>(70 + 50 * k);
+      const float drift = a.phase(60.0f) * kWidth;
+      draw_icon_aa(fb, drift - 4.0f, 0.0f, kIconMoon, RGB(v / 3, v / 3, v / 2));
+      draw_icon_aa(fb, drift - 4.0f + kWidth, 0.0f, kIconMoon, RGB(v / 3, v / 3, v / 2));
       break;
     }
 
     case Screen::Booting: {
-      const RGB c = ui.wifi_connected ? RGB(0, 160, 60) : RGB(40, 90, 180);
-      draw_text_centered(fb, 0, "WIFI", c);
-      // A scanner on the bottom row while it is still trying.
-      if (!ui.wifi_connected) {
-        const int span = 2 * kWidth - 2;
-        int p = static_cast<int>((now_ms / 40) % span);
-        if (p >= kWidth) p = span - p;
-        fb.set(p, kHeight - 1, c);
+      const RGB c = ui.wifi_connected ? RGB(0, 190, 80) : RGB(60, 120, 220);
+      if (ui.wifi_connected) {
+        draw_stroke_icon(fb, kIconX, 0, kStrokeCheck,
+                         clamp01(static_cast<float>(a.t) * 2.0f), c, RGB(255, 255, 255));
+        mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, "OK", c);
+      } else {
+        draw_anim_icon(fb, kIconX, 0, kAnimWifi, a.t, c);
+        mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, "WIFI", c);
+        sheen(fb, a, 7, kLabelX, kWidth - 1, c, 1.5f);
       }
       break;
     }
@@ -194,6 +331,18 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, uint32_t now_ms) 
     default:
       break;
   }
+}
+
+void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, uint32_t now_ms) {
+  // Still form for callers that have no frame clock. The scratch state is
+  // local, not static: each call starts fresh so eased values snap to their
+  // target rather than carrying a half-finished glide in from a previous call
+  // with completely different state.
+  ScreenAnim scratch;
+  Anim a;
+  a.dt = 0.0f;
+  a.t = now_ms / 1000.0;
+  draw_screen(fb, s, ui, a, scratch);
 }
 
 }  // namespace panel

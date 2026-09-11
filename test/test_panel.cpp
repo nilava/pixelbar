@@ -11,7 +11,12 @@
 #include "panel/font.h"
 #include "panel/framebuffer.h"
 #include "panel/patterns.h"
+#include "panel/renderer.h"
+#include "panel/digit_roll.h"
+#include "panel/icons.h"
+#include "panel/mini_font.h"
 #include "panel/screens.h"
+#include "panel/transition.h"
 
 using namespace panel;
 
@@ -189,7 +194,7 @@ static void test_color() {
 
   CASE("the gamma table is monotonic and anchored at both ends");
   CHECK_EQ(kGamma8[0], 0);
-  CHECK(kGamma8[255] > 200);
+  CHECK_EQ(kGamma8[255], 255);  // the table must reach the top of the range
   for (int i = 1; i < 256; ++i) CHECK(kGamma8[i] >= kGamma8[i - 1]);
 }
 
@@ -490,11 +495,26 @@ static void test_screens() {
   ui.status = Status::Busy;
   draw_screen(fb, Screen::Status, ui, 0);
   CHECK(lit_count(fb) > 0);
-  bool found_busy = false;
-  for (int y = 0; y < kHeight; ++y)
-    for (int x = 0; x < kWidth; ++x)
-      if (fb.get(x, y) == status_color(Status::Busy)) found_busy = true;
-  CHECK(found_busy);
+  // The status colour now breathes, so it is never exactly the base colour.
+  // Assert the hue family instead: BUSY is dominated by red, FREE by green.
+  auto brightest = [](const Framebuffer& f) {
+    RGB best;
+    int bv = -1;
+    for (int y = 0; y < kHeight; ++y)
+      for (int x = 0; x < kWidth; ++x) {
+        const RGB c = f.get(x, y);
+        const int v = c.r + c.g + c.b;
+        if (v > bv) { bv = v; best = c; }
+      }
+    return best;
+  };
+  RGB top = brightest(fb);
+  CHECK(top.r > top.g && top.r > top.b);
+  ui.status = Status::Free;
+  draw_screen(fb, Screen::Status, ui, 0);
+  top = brightest(fb);
+  CHECK(top.g > top.r && top.g > top.b);
+  ui.status = Status::Busy;
 
   CASE("a timer longer than 24 minutes is not wrapped like a clock");
   {
@@ -528,7 +548,8 @@ static void test_screens() {
   for (int y = 0; y < kHeight; ++y)
     for (int x = 0; x < kWidth; ++x) {
       const RGB c = fb.get(x, y);
-      if (c.lit() && c.r > 200 && c.g < 80) any_red = true;
+      // The last-minute face pulses, so test the hue, not an exact value.
+      if (c.lit() && c.r > 60 && c.r > 3 * c.g && c.r > 3 * c.b) any_red = true;
     }
   CHECK(any_red);
   CHECK(lit_calm > 0);
@@ -562,23 +583,501 @@ static void test_screens() {
   CHECK(fb.get(0, 7).lit());
 
   CASE("the colour picker puts its cursor where the hue says");
-  ui.hue = 0.0f;
+  auto cursor_col = [&](float hue) {
+    ui.hue = hue;
+    draw_screen(fb, Screen::ColorPick, ui, 0);
+    int best = -1, bv = -1;
+    for (int x = 0; x < kWidth; ++x) {
+      const RGB c = fb.get(x, 7);
+      const int v = c.r + c.g + c.b;
+      if (v > bv) { bv = v; best = x; }
+    }
+    return best;
+  };
+  // The cursor pulses and is drawn sub-pixel, so check where it is, not its
+  // exact value. It must be white: no hue of its own.
+  CHECK_EQ(cursor_col(0.0f), 0);
+  CHECK_EQ(cursor_col(1.0f), kWidth - 1);
+  ui.hue = 0.5f;
   draw_screen(fb, Screen::ColorPick, ui, 0);
-  CHECK(fb.get(0, 7) == RGB(255, 255, 255));
-  ui.hue = 1.0f;
-  draw_screen(fb, Screen::ColorPick, ui, 0);
-  CHECK(fb.get(kWidth - 1, 7) == RGB(255, 255, 255));
+  const RGB cur = fb.get(kWidth / 2, 7);
+  CHECK(cur.r == cur.g && cur.g == cur.b);
 
-  CASE("sleep shows one dim pixel and nothing else");
+  CASE("sleep is dim but actually reaches the LEDs");
   draw_screen(fb, Screen::Sleep, ui, 0);
-  CHECK_EQ(lit_count(fb), 1);
-  CHECK(fb.get(0, kHeight - 1).r < 20);
+  CHECK(lit_count(fb) > 0);
+  CHECK(lit_count(fb) < 40);  // a moon, not a lit panel
+  // The bug this replaces: the old sleep screen used framebuffer values of
+  // 2..10, and gamma plus the default brightness rounded every one of them to
+  // zero, so it was pure black on hardware. Assert the rendered bytes, not the
+  // framebuffer.
+  uint8_t sleep_wire[kNumLeds * 3];
+  fb.render(sleep_wire, kDefaultBrightness, kMaxMilliamps, kWiring);
+  int nonzero = 0;
+  for (int i = 0; i < kNumLeds * 3; ++i) nonzero += sleep_wire[i] ? 1 : 0;
+  CHECK(nonzero > 0);
+  CHECK(fb.estimate_ma(kDefaultBrightness) < 400.0f);  // still nearly dark
 
   CASE("screen names round-trip to something printable");
   for (int i = 0; i < static_cast<int>(Screen::Count); ++i) {
     const char* n = screen_name(static_cast<Screen>(i));
     CHECK(n != nullptr && n[0] != '?');
   }
+}
+
+// ---------------------------------------------------------------- new layers
+
+// Intensity-weighted x centre of a row. This is the stepping detector: if a
+// moving thing jumps a whole LED, the centroid jumps with it.
+static float centroid_x(const Framebuffer& fb, int y) {
+  double num = 0, den = 0;
+  for (int x = 0; x < kWidth; ++x) {
+    const RGB c = fb.get(x, y);
+    const double w = c.r + c.g + c.b;
+    num += w * x;
+    den += w;
+  }
+  return den > 0 ? static_cast<float>(num / den) : -1.0f;
+}
+
+// Total ink in a row, in whole-pixel units: 12.4 means 12 lit plus 40% of one.
+static float row_fill(const Framebuffer& fb, int y) {
+  double s = 0;
+  for (int x = 0; x < kWidth; ++x) s += fb.get(x, y).r / 255.0;
+  return static_cast<float>(s);
+}
+
+static void test_anim() {
+  CASE("easing starts at 0 and ends at 1");
+  float (*const fns[])(float) = {ease::linear, ease::in_out_sine, ease::out_cubic,
+                                 ease::in_out_cubic, ease::out_quint, ease::out_back,
+                                 ease::out_elastic};
+  for (auto f : fns) {
+    CHECK_NEAR(f(0.0f), 0.0f, 1e-3);
+    CHECK_NEAR(f(1.0f), 1.0f, 1e-3);
+    CHECK_NEAR(f(-5.0f), 0.0f, 1e-3);  // clamped
+    CHECK_NEAR(f(5.0f), 1.0f, 1e-3);
+  }
+
+  CASE("the eases meant to stay in range do");
+  for (int i = 0; i <= 64; ++i) {
+    const float u = i / 64.0f;
+    CHECK(ease::out_cubic(u) >= -1e-4f && ease::out_cubic(u) <= 1.0001f);
+    CHECK(ease::in_out_cubic(u) >= -1e-4f && ease::in_out_cubic(u) <= 1.0001f);
+    CHECK(ease::in_out_sine(u) >= -1e-4f && ease::in_out_sine(u) <= 1.0001f);
+  }
+
+  CASE("the sine table agrees with libm");
+  for (int i = 0; i <= 256; ++i) {
+    const float turns = i / 256.0f;
+    CHECK_NEAR(fast_sin(turns), std::sin(turns * 6.283185307f), 0.002);
+    CHECK_NEAR(fast_cos(turns), std::cos(turns * 6.283185307f), 0.002);
+  }
+  CASE("the sine table wraps");
+  CHECK_NEAR(fast_sin(1.25f), fast_sin(0.25f), 1e-5);
+  CHECK_NEAR(fast_sin(-0.25f), fast_sin(0.75f), 1e-5);
+
+  CASE("smoothing is frame-rate independent");
+  Smoothed a(0.0f, 0.1f), b(0.0f, 0.1f);
+  a.set_target(1.0f);
+  b.set_target(1.0f);
+  for (int i = 0; i < 100; ++i) a.update(0.010f);   // 100 fps
+  for (int i = 0; i < 1000; ++i) b.update(0.001f);  // 1000 fps
+  CHECK_NEAR(a.value(), b.value(), 1e-3);
+
+  CASE("smoothing approaches without overshooting");
+  Smoothed s(0.0f, 0.1f);
+  s.set_target(1.0f);
+  for (int i = 0; i < 400; ++i) {
+    const float v = s.update(0.010f);
+    CHECK(v <= 1.0001f);
+    CHECK(v >= -1e-4f);
+  }
+  CHECK(s.settled());
+
+  CASE("a stall does not teleport the clock");
+  FrameClock fc;
+  fc.tick(0);
+  fc.tick(60u * 1000000u);  // a minute of nothing
+  CHECK(fc.now_s() <= kMaxFrameDt + 1e-6);
+
+  CASE("the microsecond clock survives its 32-bit wrap");
+  FrameClock w;
+  w.tick(0xFFFF0000u);
+  const Anim after = w.tick(0xFFFF0000u + 10000u);  // 10 ms later, past the wrap
+  CHECK_NEAR(after.dt, 0.010f, 1e-4);
+}
+
+static void test_subpixel() {
+  CASE("a bar at a fractional position partially lights the boundary LED");
+  Framebuffer fb;
+  fb.clear();
+  draw_bar_aa(fb, 7, 7, 0.517f, RGB(255, 255, 255), RGB(0, 0, 0));
+  CHECK_NEAR(row_fill(fb, 7), 0.517f * kWidth, 0.05);
+  CHECK_EQ(fb.get(11, 7).r, 255);
+  CHECK_NEAR(fb.get(12, 7).r, 255 * 0.408, 3.0);
+  CHECK_EQ(fb.get(13, 7).r, 0);
+
+  CASE("bar fill is continuous across every fraction");
+  for (int i = 0; i <= 200; ++i) {
+    const float f = i / 200.0f;
+    fb.clear();
+    draw_bar_aa(fb, 7, 7, f, RGB(255, 255, 255), RGB(0, 0, 0));
+    CHECK_NEAR(row_fill(fb, 7), f * kWidth, 0.05);
+  }
+
+  CASE("sub-pixel text moves continuously instead of one LED at a time");
+  float prev = -1.0f;
+  for (int i = 0; i <= 20; ++i) {
+    Framebuffer f;
+    f.clear();
+    draw_text_aa(f, 6.0f + i * 0.05f, 0, "H", RGB(255, 255, 255));
+    const float c = centroid_x(f, 3);
+    if (prev >= 0.0f) CHECK_NEAR(c - prev, 0.05f, 0.02f);
+    prev = c;
+  }
+
+  CASE("anti-aliased text conserves its ink at any offset");
+  auto ink = [](const Framebuffer& f) {
+    long t = 0;
+    for (int y = 0; y < kHeight; ++y)
+      for (int x = 0; x < kWidth; ++x) t += f.get(x, y).r;
+    return t;
+  };
+  Framebuffer a, b;
+  a.clear();
+  b.clear();
+  draw_text_aa(a, 6.0f, 0, "HI", RGB(255, 255, 255));
+  draw_text_aa(b, 6.5f, 0, "HI", RGB(255, 255, 255));
+  CHECK_NEAR(static_cast<double>(ink(b)) / ink(a), 1.0, 0.03);
+  CHECK(lit_count(b) > lit_count(a));  // the half offset splits every column
+
+  CASE("a sub-pixel point splits its coverage between two LEDs");
+  fb.clear();
+  fb.set_aa(5.25f, 0, RGB(200, 200, 200), 1.0f, Blend::Add);
+  CHECK_NEAR(fb.get(5, 0).r, 150.0, 2.0);
+  CHECK_NEAR(fb.get(6, 0).r, 50.0, 2.0);
+
+  CASE("a blit at a whole-pixel offset is an exact shift");
+  Framebuffer src, dst;
+  src.clear();
+  src.set(4, 2, RGB(255, 0, 0));
+  dst.clear();
+  blit_offset(dst, src, 3.0f, 0.0f);
+  CHECK(dst.get(7, 2) == RGB(255, 0, 0));
+  CHECK_EQ(lit_count(dst), 1);
+}
+
+static void test_mini_font() {
+  CASE("four-letter labels are exactly the 15 px label box");
+  CHECK_EQ(mini_text_ink_width("BUSY"), kMiniLabelBox);
+  CHECK_EQ(mini_text_ink_width("FREE"), kMiniLabelBox);
+  CHECK_EQ(mini_text_ink_width("CALL"), kMiniLabelBox);
+  CHECK_EQ(mini_text_ink_width("DONE"), kMiniLabelBox);
+  CHECK_EQ(mini_text_ink_width("DND"), 11);
+  CHECK_EQ(mini_text_ink_width(""), 0);
+
+  CASE("every status label fits beside its icon");
+  for (int i = 0; i < static_cast<int>(Status::Count); ++i) {
+    CHECK(mini_text_fits(status_label(static_cast<Status>(i))));
+  }
+
+  CASE("the whole alphabet has a glyph and a sane width");
+  for (char c = 'A'; c <= 'Z'; ++c) {
+    const MiniGlyph* g = mini_glyph_for(c);
+    CHECK(g != nullptr);
+    if (g) CHECK(g->w >= 1 && g->w <= kMiniMaxW);
+  }
+  for (char c = '0'; c <= '9'; ++c) CHECK(mini_glyph_for(c) != nullptr);
+  CHECK(mini_glyph_for('~') == nullptr);
+
+  CASE("lowercase folds to uppercase");
+  CHECK_EQ(mini_char_advance('b'), mini_char_advance('B'));
+
+  CASE("no glyph has ink outside its declared width");
+  for (char c = 'A'; c <= 'Z'; ++c) {
+    const MiniGlyph* g = mini_glyph_for(c);
+    if (!g) continue;
+    for (int r = 0; r < kMiniH; ++r) {
+      for (int col = g->w; col < kMiniMaxW; ++col) {
+        CHECK((g->rows[r] & (1 << (kMiniMaxW - 1 - col))) == 0);
+      }
+    }
+  }
+
+  CASE("a label drawn in its box never touches the icon or the gutter");
+  Framebuffer fb;
+  fb.clear();
+  mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, "BUSY", RGB(255, 255, 255));
+  for (int y = 0; y < kHeight; ++y)
+    for (int x = 0; x <= kGutterX; ++x) CHECK(!fb.get(x, y).lit());
+  for (int x = 0; x < kWidth; ++x) {
+    CHECK(!fb.get(x, 0).lit());
+    CHECK(!fb.get(x, 6).lit());
+    CHECK(!fb.get(x, 7).lit());
+  }
+}
+
+static void test_icons() {
+  CASE("icons are neither blank nor solid");
+  const Icon* set[] = {&kIconFree, &kIconBusy, &kIconDnd, &kIconMoon,
+                       &kIconHourglass, &kIconSunCore, &kIconSunRays};
+  for (const Icon* ic : set) {
+    const int n = icon_lit_count(*ic);
+    CHECK(n >= 6 && n <= 56);
+  }
+  CASE("BUSY is the FREE ring filled in, so the dissolve reads as solidifying");
+  CHECK(icon_lit_count(kIconBusy) > icon_lit_count(kIconFree));
+
+  CASE("an icon drawn on the panel lights exactly its own pixels");
+  Framebuffer fb;
+  fb.clear();
+  draw_icon(fb, 0, 0, kIconFree, RGB(255, 255, 255));
+  CHECK_EQ(lit_count(fb), icon_lit_count(kIconFree));
+
+  CASE("an icon drawn off the edge is clipped, not wrapped");
+  fb.clear();
+  draw_icon(fb, kWidth - 2, 0, kIconBusy, RGB(255, 255, 255));
+  CHECK(lit_count(fb) > 0);
+  CHECK(lit_count(fb) < icon_lit_count(kIconBusy));
+  for (int y = 0; y < kHeight; ++y)
+    for (int x = 0; x < kWidth - 2; ++x) CHECK(!fb.get(x, y).lit());
+
+  CASE("animated icons cycle and never index out of range");
+  for (int i = 0; i < 200; ++i) {
+    const double t = i * 0.037;
+    const Icon& f1 = anim_frame(kAnimCall, t);
+    const Icon& f2 = anim_frame(kAnimCall, t + kAnimCall.count / kAnimCall.fps);
+    CHECK(icon_lit_count(f1) == icon_lit_count(f2));
+  }
+  CASE("the wifi icon fills as it goes");
+  CHECK(icon_lit_count(anim_frame(kAnimWifi, 0.0)) <
+        icon_lit_count(anim_frame(kAnimWifi, 3.0 / kAnimWifi.fps)));
+
+  CASE("a masked icon shows the shell empty and the shell plus fill when full");
+  Framebuffer e, f;
+  e.clear();
+  f.clear();
+  draw_icon_masked(e, 0, 0, kIconHourglass, kIconHourglassBottom, 0.0f,
+                   RGB(255, 255, 255), RGB(255, 255, 255));
+  draw_icon_masked(f, 0, 0, kIconHourglass, kIconHourglassBottom, 1.0f,
+                   RGB(255, 255, 255), RGB(255, 255, 255));
+  CHECK(lit_count(f) > lit_count(e));
+
+  CASE("a stroke icon draws itself on in order");
+  int prev = -1;
+  for (int i = 0; i <= 10; ++i) {
+    Framebuffer sfb;
+    sfb.clear();
+    draw_stroke_icon(sfb, 0, 0, kStrokeCheck, i / 10.0f, RGB(255, 255, 255),
+                     RGB(255, 255, 255));
+    const int n = lit_count(sfb);
+    CHECK(n >= prev);  // monotonic
+    prev = n;
+  }
+  CHECK_EQ(prev, kStrokeCheck.n);
+}
+
+static void test_digit_roll() {
+  CASE("a roll stays inside its own five-row band");
+  Framebuffer fb;
+  const RGB sentinel(9, 9, 9);
+  PairFaceAnim anim;
+  // Prime, then change, then sample mid-roll.
+  draw_pair_face_anim(fb, anim, 25, 0, true, RGB(255, 255, 255), 0.0);
+  for (int i = 1; i <= 12; ++i) {
+    fb.fill(sentinel);
+    draw_pair_face_anim(fb, anim, 24, 59, true, RGB(255, 255, 255),
+                        0.0 + i * (kRollSeconds / 12.0));
+    for (int x = 0; x < kWidth; ++x) {
+      CHECK(fb.get(x, 0) == sentinel);
+      CHECK(fb.get(x, 6) == sentinel);
+      CHECK(fb.get(x, 7) == sentinel);
+    }
+  }
+
+  CASE("a roll lands exactly on the new digit");
+  Framebuffer rolled, plain;
+  PairFaceAnim a2;
+  draw_pair_face_anim(rolled, a2, 25, 0, true, RGB(255, 255, 255), 0.0);
+  draw_pair_face_anim(rolled, a2, 24, 59, true, RGB(255, 255, 255), 0.0);
+  rolled.clear();
+  draw_pair_face_anim(rolled, a2, 24, 59, true, RGB(255, 255, 255), 1.0);
+  plain.clear();
+  draw_pair_face(plain, 24, 59, true, RGB(255, 255, 255));
+  for (int y = 0; y < kHeight; ++y)
+    for (int x = 0; x < kWidth; ++x) CHECK(rolled.get(x, y) == plain.get(x, y));
+
+  CASE("only the digits that changed roll");
+  PairFaceAnim a3;
+  Framebuffer f3;
+  draw_pair_face_anim(f3, a3, 25, 0, true, RGB(255, 255, 255), 0.0);
+  draw_pair_face_anim(f3, a3, 24, 59, true, RGB(255, 255, 255), 0.0);
+  int active = 0;
+  for (int i = 0; i < 4; ++i) active += a3.d[i].active ? 1 : 0;
+  CHECK_EQ(active, 3);  // 2500 -> 2459 changes three of the four digits
+}
+
+static void test_dither() {
+  uint8_t w[kNumLeds * 3];
+  Framebuffer fb;
+
+  CASE("a dithered channel time-averages to its exact value");
+  fb.clear();
+  fb.set(0, 0, RGB(0, 37, 0));
+  Renderer r;
+  const int i0 = led_index(0, 0, kWiring) * 3;  // green is the first byte
+  long sum = 0;
+  const int N = 512;
+  for (int i = 0; i < N; ++i) {
+    r.render(fb, w, 48, kMaxMilliamps, kWiring);
+    sum += w[i0];
+  }
+  const double exact = kGamma8[37] * 48.0 / 255.0;
+  CHECK_NEAR(sum / static_cast<double>(N), exact, 0.05);
+
+  CASE("a value that rounds to zero without dithering still reaches the LEDs");
+  // This is the sleep-screen bug in miniature: gamma plus a low brightness
+  // rounds small values away entirely unless the remainder is carried.
+  fb.clear();
+  fb.fill(RGB(70, 70, 70));
+  Renderer dim;
+  long lit_frames = 0;
+  for (int i = 0; i < 64; ++i) {
+    dim.render(fb, w, 8, kMaxMilliamps, kWiring);
+    for (int j = 0; j < kNumLeds * 3; ++j)
+      if (w[j]) { ++lit_frames; break; }
+  }
+  CHECK(lit_frames > 0);
+
+  CASE("dithering is deterministic");
+  Renderer a, b;
+  uint8_t wa[kNumLeds * 3], wb[kNumLeds * 3];
+  for (int i = 0; i < 16; ++i) {
+    a.render(fb, wa, 48, kMaxMilliamps, kWiring);
+    b.render(fb, wb, 48, kMaxMilliamps, kWiring);
+    CHECK_EQ(std::memcmp(wa, wb, sizeof wa), 0);
+  }
+
+  CASE("with dithering off, identical frames give identical bytes");
+  Renderer nd;
+  nd.set_dither(false);
+  nd.render(fb, wa, 48, kMaxMilliamps, kWiring);
+  nd.render(fb, wb, 48, kMaxMilliamps, kWiring);
+  CHECK_EQ(std::memcmp(wa, wb, sizeof wa), 0);
+
+  CASE("neighbouring LEDs do not dither in lockstep");
+  // A uniform panel must not toggle as one block: that reads as a shimmer.
+  Renderer u;
+  u.render(fb, w, 48, kMaxMilliamps, kWiring);
+  std::set<uint8_t> seen;
+  for (int i = 0; i < kNumLeds * 3; ++i) seen.insert(w[i]);
+  CHECK(seen.size() >= 2);
+
+  CASE("the power cap still holds with dithering on");
+  Framebuffer white;
+  white.fill(RGB(255, 255, 255));
+  Renderer pc;
+  const RenderStats st = pc.render(white, w, 255, kMaxMilliamps, kWiring);
+  CHECK(st.power_scale < 1.0f);
+  CHECK(st.est_ma > 10000.0f);
+}
+
+static void test_transitions() {
+  UiState ui;
+  Framebuffer from, to, out;
+  ScreenAnim sa, sb;
+  Anim a;
+  a.dt = 0.0f;
+  a.t = 1.0;
+  ui.status = Status::Busy;
+  draw_screen(from, Screen::Status, ui, a, sa);
+  draw_screen(to, Screen::Clock, ui, a, sb);
+
+  CASE("every transition starts on the old screen and ends on the new one");
+  for (int k = 1; k < static_cast<int>(TransitionKind::Count); ++k) {
+    const TransitionKind kind = static_cast<TransitionKind>(k);
+    compose(out, from, to, kind, 0.0f);
+    for (int y = 0; y < kHeight; ++y)
+      for (int x = 0; x < kWidth; ++x) CHECK(out.get(x, y) == from.get(x, y));
+    compose(out, from, to, kind, 1.0f);
+    for (int y = 0; y < kHeight; ++y)
+      for (int x = 0; x < kWidth; ++x) CHECK(out.get(x, y) == to.get(x, y));
+  }
+
+  CASE("the dissolve order is a true permutation of the panel");
+  std::set<int> ranks;
+  for (int y = 0; y < kHeight; ++y)
+    for (int x = 0; x < kWidth; ++x) ranks.insert(dissolve_rank(x, y));
+  CHECK_EQ(ranks.size(), kNumLeds);
+
+  CASE("the dissolve switches pixels steadily, in proportion to progress");
+  int prev = -1;
+  for (int i = 0; i <= 32; ++i) {
+    const float p = i / 32.0f;
+    compose(out, from, to, TransitionKind::Dissolve, p);
+    int switched = 0;
+    for (int y = 0; y < kHeight; ++y)
+      for (int x = 0; x < kWidth; ++x)
+        if (dissolve_rank(x, y) < static_cast<int>(p * kNumLeds + 0.5f)) ++switched;
+    CHECK(switched >= prev);
+    prev = switched;
+  }
+
+  CASE("a fade passes through black");
+  compose(out, from, to, TransitionKind::Fade, 0.5f);
+  CHECK_EQ(lit_count(out), 0);
+
+  CASE("the transition kind matches the gesture");
+  CHECK_EQ(static_cast<int>(ScreenManager::kind_for(Screen::Status, Screen::Clock)),
+           static_cast<int>(TransitionKind::SlideLeft));
+  CHECK_EQ(static_cast<int>(ScreenManager::kind_for(Screen::Clock, Screen::Status)),
+           static_cast<int>(TransitionKind::SlideRight));
+  CHECK_EQ(static_cast<int>(ScreenManager::kind_for(Screen::Timer, Screen::Brightness)),
+           static_cast<int>(TransitionKind::WipeUp));
+  CHECK_EQ(static_cast<int>(ScreenManager::kind_for(Screen::Brightness, Screen::Timer)),
+           static_cast<int>(TransitionKind::WipeDown));
+  CHECK_EQ(static_cast<int>(ScreenManager::kind_for(Screen::Status, Screen::Sleep)),
+           static_cast<int>(TransitionKind::Fade));
+
+  CASE("a managed transition runs to completion and never blanks the panel");
+  ScreenManager m;
+  m.set_screen(Screen::Status);
+  m.go_to(Screen::Clock);
+  CHECK(m.busy());
+  float last = 0.0f;
+  Anim step;
+  step.dt = 0.01f;
+  int blank_frames = 0;
+  for (int i = 0; i < 40; ++i) {
+    step.t = 1.0 + i * 0.01;
+    m.render(out, ui, step);
+    CHECK(m.progress() >= last);
+    last = m.progress();
+    if (lit_count(out) == 0) ++blank_frames;
+  }
+  CHECK(!m.busy());
+  CHECK_EQ(m.current(), static_cast<int>(Screen::Clock));
+  CHECK(blank_frames == 0);  // a slide never goes dark
+
+  CASE("both screens keep animating through a transition");
+  ScreenManager m2;
+  m2.set_screen(Screen::Status);
+  m2.go_to(Screen::Clock, TransitionKind::SlideLeft, 1.0f);
+  Framebuffer f1, f2;
+  Anim s1, s2;
+  s1.dt = 0.0f;
+  s1.t = 5.0;
+  m2.render(f1, ui, s1);
+  // Same progress, different absolute time: a frozen screen would be identical.
+  s2.dt = 0.0f;
+  s2.t = 5.4;
+  m2.render(f2, ui, s2);
+  bool moved = false;
+  for (int y = 0; y < kHeight && !moved; ++y)
+    for (int x = 0; x < kWidth && !moved; ++x)
+      if (!(f1.get(x, y) == f2.get(x, y))) moved = true;
+  CHECK(moved);
 }
 
 int main() {
@@ -590,6 +1089,13 @@ int main() {
   test_render_order_and_power();
   test_engine();
   test_screens();
+  test_anim();
+  test_subpixel();
+  test_mini_font();
+  test_icons();
+  test_digit_roll();
+  test_transitions();
+  test_dither();
   std::printf("%d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;
 }
