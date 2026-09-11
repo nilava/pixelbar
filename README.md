@@ -55,6 +55,13 @@ ring solidifying.
 | ![free](docs/anim/status-free.gif) | ![call](docs/anim/status-call.gif) |
 | ![timer](docs/anim/timer.gif) | ![colour picker](docs/anim/colorpick.gif) |
 
+Elements change in place rather than moving across the panel. A digit turns
+over like the face of a counter wheel — both faces on screen for the whole
+turn, the outgoing one foreshortening and riding away from the axis while the
+incoming one rises into it, which is the projection of a cylinder and is drawn
+as one. An icon and its label hand over by collapsing into themselves while the
+next pair grows out of the same spot.
+
 Everything moves. Icons breathe, CALL animates its handset and pulses harder
 because it is the one status that must interrupt you, the clock's second hand
 walks the panel's 60-pixel perimeter, timer digits roll, bars glide to their
@@ -66,18 +73,31 @@ The motion is semantic: it tells you what kind of move just happened.
 
 | | |
 | --- | --- |
-| ![slide](docs/anim/trans-slide.gif) | ![dissolve](docs/anim/trans-dissolve.gif) |
+| ![disk](docs/anim/trans-disk.gif) | ![ignite](docs/anim/trans-ignite.gif) |
 
 | Gesture | Motion |
 | --- | --- |
-| Moving through the view cycle | Slides sideways |
+| Moving through the view cycle | The panel turns like a record |
 | Opening an adjust screen | Wipes up, like a drawer |
-| A status change | Dissolves, pixel by pixel |
+| A status change | The new colour bursts out of the icon and is drawn back into it |
 | Sleeping or waking | Fades through black |
 
-Both screens keep animating for the whole transition, and the outgoing one
-keeps the state it had when the move began, so a status change dissolves from
-the old word into the new one rather than flipping instantly.
+Nothing slides. The panel is read as a radial strip of a disk — column 0 at the
+hub, column 23 at the rim — so content printed on it advances through the same
+*angle* at every radius and therefore a different *distance*. The rim end whips
+past while the hub end crawls, and a glyph shears as it goes because its left
+edge is moving slower than its right. A slide moves every column by the same
+amount, which at 24 columns reads as pixels being moved rather than an object
+turning.
+
+A status change is not a transition at all but an event: a front of the new
+colour bursts out of the icon with a white-hot leading edge, floods the panel,
+and is then drawn back in — and what it uncovers is the new screen. It lands on
+the icon, because that is where it came from.
+
+Both screens keep animating for the whole move, and the outgoing one is drawn
+with the state it had when the move began, so a status change animates from the
+old word into the new one rather than flipping instantly.
 
 ## What makes it smooth
 
@@ -109,15 +129,27 @@ wanted 576 of them per frame. Trigonometry is a 256-entry table.
 | EC11 encoder | bare, behind the top wall, knob on the top edge |
 | 1N5819, 330 Ω, 1000 µF | back-feed block, data series resistor, bulk cap |
 
-The full wiring diagram, GPIO map and wire list live in `hardware/`, along with
-the parametric enclosure model and its interference audit.
+The GPIO map, the power wiring and the physical placement are in
+[`hardware/WIRING.md`](hardware/WIRING.md), alongside the parametric enclosure
+model and its interference audit.
 
 ```
+hardware/WIRING.md                             # pin map, power, placement
 hardware/enclosure/ws2812b_8x24_enclosure.py   # the model; edit params, re-run
 hardware/enclosure/check.py                    # 16 interference + clearance checks
 hardware/enclosure/fit_test.py                 # corner coupons for a test print
+hardware/enclosure/render.py                   # the mesh renderer behind hardware/img
 hardware/stl/                                  # tray.stl, grid.stl and the coupons
 ```
+
+| | |
+| --- | --- |
+| ![tray posts](hardware/img/tray-posts.png) | ![snap section](hardware/img/snap-section.png) |
+
+The snap closure is rigid posts on the tray meeting spring beams inside the
+frame. The beams flex **in the print plane**, so nothing relies on the strength
+of a layer bond — printing the parts flat would otherwise snap the hooks off the
+first time you closed the case.
 
 ## Firmware quick start
 

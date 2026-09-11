@@ -66,6 +66,5 @@ void draw_hourglass(Framebuffer& fb, int x, int y, float remaining, double t_s,
                     RGB shell, RGB sand);
 
 // The one multi-coloured icon, so it gets its own function.
-void draw_palette_icon(Framebuffer& fb, int x, int y, float hue, double t_s);
 
 }  // namespace panel

@@ -263,17 +263,4 @@ void draw_hourglass(Framebuffer& fb, int x, int y, float remaining, double t_s,
   }
 }
 
-void draw_palette_icon(Framebuffer& fb, int x, int y, float hue, double t_s) {
-  // Four swatches a quarter-turn apart, rotating once every 20 s.
-  const float spin = static_cast<float>(t_s) / 20.0f;
-  const int ox[4] = {1, 5, 1, 5};
-  const int oy[4] = {1, 1, 5, 5};
-  for (int q = 0; q < 4; ++q) {
-    const RGB c = hsv(hue + spin + q * 0.25f, 1.0f, 1.0f);
-    for (int dy = 0; dy < 3; ++dy) {
-      for (int dx = 0; dx < 3; ++dx) fb.set(x + ox[q] + dx, y + oy[q] + dy, c);
-    }
-  }
-}
-
 }  // namespace panel

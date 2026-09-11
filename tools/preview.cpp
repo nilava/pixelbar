@@ -325,15 +325,17 @@ void render_clip(const Clip& c, const std::string& dir) {
     const float secs = static_cast<float>(i) / kAnimFps;
     if (!fired && c.go_at >= 0.0f && secs >= c.go_at) {
       fired = true;
-      if (c.status_after != Status::Count) ui.status = c.status_after;
+      // Tell the manager what it is leaving before the state changes, so the
+      // outgoing side is drawn with the state it actually had.
       if (c.kind == TransitionKind::None) {
-        mgr.go_to(c.go_to);
+        mgr.go_to(c.go_to, ui);
       } else if (c.go_to == mgr.current()) {
         // A change in place, not a new screen.
-        mgr.restart_with(c.kind, transition_seconds(c.kind));
+        mgr.restart_with(ui, c.kind, transition_seconds(c.kind));
       } else {
-        mgr.go_to(c.go_to, c.kind);
+        mgr.go_to(c.go_to, ui, c.kind);
       }
+      if (c.status_after != Status::Count) ui.status = c.status_after;
     }
     // A live second hand and a counting timer, so the clips show real motion.
     ui.second = static_cast<int>(secs) % 60;

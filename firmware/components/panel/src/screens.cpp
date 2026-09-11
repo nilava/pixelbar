@@ -133,9 +133,15 @@ const Icon& status_icon(Status s) {
     case Status::Free: return kIconFree;
     case Status::Busy: return kIconBusy;
     case Status::Dnd: return kIconDnd;
+    // CALL animates when it is settled, but a swap needs one still frame to
+    // scale, and falling through to the FREE ring here meant a change into or
+    // out of CALL turned over the wrong picture.
+    case Status::Call: return kAnimCall.frames[0];
     default: return kIconFree;
   }
 }
+
+RGB accent_from_hue(float hue) { return hsv(clamp01(hue), 1.0f, 1.0f); }
 
 void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
                  ScreenAnim& sa) {

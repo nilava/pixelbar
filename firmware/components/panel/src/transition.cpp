@@ -68,28 +68,30 @@ void ScreenManager::set_screen(Screen s) {
   elapsed_ = 0.0f;
 }
 
-void ScreenManager::go_to(Screen s) {
+void ScreenManager::go_to(Screen s, const UiState& leaving) {
   const TransitionKind k = kind_for(to_, s);
-  go_to(s, k, transition_seconds(k));
+  go_to(s, leaving, k, transition_seconds(k));
 }
 
-void ScreenManager::go_to(Screen s, TransitionKind k, float dur_s) {
+void ScreenManager::go_to(Screen s, const UiState& leaving, TransitionKind k,
+                          float dur_s) {
   if (s == to_ && k != TransitionKind::Dissolve) return;
   from_ = to_;
   to_ = s;
   kind_ = k;
   dur_ = dur_s > 0.0f ? dur_s : kTransitionSeconds;
   elapsed_ = 0.0f;
-  captured_ = false;
+  from_ui_ = leaving;
   to_anim_ = ScreenAnim{};  // the arriving screen starts its animation fresh
 }
 
-void ScreenManager::restart_with(TransitionKind k, float dur_s) {
+void ScreenManager::restart_with(const UiState& leaving, TransitionKind k,
+                                 float dur_s) {
   from_ = to_;
   kind_ = k;
   dur_ = dur_s;
   elapsed_ = 0.0f;
-  captured_ = false;
+  from_ui_ = leaving;
   from_anim_ = to_anim_;   // the outgoing copy inherits where the screen was
   to_anim_ = ScreenAnim{};
 }
@@ -98,10 +100,6 @@ void ScreenManager::render(Framebuffer& out, const UiState& ui, const Anim& a) {
   if (kind_ == TransitionKind::None) {
     draw_screen(out, to_, ui, a, to_anim_);
     return;
-  }
-  if (!captured_) {
-    from_ui_ = ui;
-    captured_ = true;
   }
   elapsed_ += a.dt;
   const float p = progress();

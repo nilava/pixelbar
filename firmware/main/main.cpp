@@ -120,14 +120,16 @@ extern "C" void app_main(void) {
         stop_elapsed = 0.0f;
         const int prev = stop;
         stop = (stop + 1) % kTourLen;
-        ui.status = kTour[stop].status;
+        // The manager is told what the panel is leaving *before* ui changes,
+        // so the outgoing screen is drawn with the state it actually had.
         if (kTour[stop].screen == kTour[prev].screen) {
           // Same screen, new status: the panel is claimed in place.
-          screens.restart_with(panel::TransitionKind::Ignite,
+          screens.restart_with(ui, panel::TransitionKind::Ignite,
                                panel::transition_seconds(panel::TransitionKind::Ignite));
         } else {
-          screens.go_to(kTour[stop].screen);
+          screens.go_to(kTour[stop].screen, ui);
         }
+        ui.status = kTour[stop].status;
         ESP_LOGI(TAG, "%s / %s", panel::screen_name(screens.current()),
                  panel::status_label(ui.status));
       }
@@ -137,10 +139,17 @@ extern "C" void app_main(void) {
       ui.second = static_cast<int>(uptime_s % 60);
       ui.timer_left_s = 25 * 60 - static_cast<int>(uptime_s * 3) % (25 * 60);
       ui.hue = panel::wrap01(static_cast<float>(a.t) * 0.05f);
+      // The picker's cursor is the accent. Until the input layer lands this is
+      // what makes the colour screen control something rather than report it.
+      if (screens.current() == panel::Screen::ColorPick) {
+        ui.accent = panel::accent_from_hue(ui.hue);
+      }
       screens.render(fb, ui, a);
     }
 
-    const panel::RenderStats st = renderer.render(fb, wire[cur], panel::kDefaultBrightness,
+    // ui.brightness, not the compile-time default: the Brightness screen was
+    // a readout of a value that reached nothing.
+    const panel::RenderStats st = renderer.render(fb, wire[cur], ui.brightness,
                                                   panel::kMaxMilliamps, panel::kWiring);
     if (st.power_scale < 1.0f && !warned_about_power) {
       warned_about_power = true;

@@ -18,6 +18,10 @@ enum class Status : uint8_t { Free, Busy, Call, Dnd, Count };
 const char* status_label(Status s);
 RGB status_color(Status s);
 
+// The colour the picker's cursor is sitting on. Without this the picker moves
+// a cursor over a hue it has no way to apply.
+RGB accent_from_hue(float hue);
+
 enum class Screen : uint8_t {
   Status,      // the room-facing default: one word, one colour
   Clock,

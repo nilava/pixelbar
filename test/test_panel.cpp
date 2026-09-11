@@ -1269,7 +1269,7 @@ static void test_transitions() {
   CASE("a managed transition runs to completion and never blanks the panel");
   ScreenManager m;
   m.set_screen(Screen::Status);
-  m.go_to(Screen::Clock);
+  m.go_to(Screen::Clock, ui);
   CHECK(m.busy());
   float last = 0.0f;
   Anim step;
@@ -1288,10 +1288,64 @@ static void test_transitions() {
   CHECK_EQ(m.current(), static_cast<int>(Screen::Clock));
   CHECK(blank_frames == 0);  // the view cycle never goes dark
 
+  CASE("the outgoing screen keeps the state it was showing, not the new one");
+  {
+    // The manager is told what it is leaving while the caller still holds it.
+    // Snapshotting lazily on the first transition frame drew the *new* state on
+    // both sides. On the Status screen its own swap animation disguised that,
+    // which is why it went unnoticed; a menu list would have shown the new item
+    // scrolling away from itself.
+    //
+    // Brightness is the screen that can prove it: its NN% label is drawn
+    // straight from ui.brightness with no eased state in between, so there is
+    // nothing to hide behind.
+    auto label_ink = [](const Framebuffer& f) {
+      int n = 0;
+      for (int y = 1; y <= 5; ++y)
+        for (int x = kLabelX; x < kWidth; ++x)
+          if (f.get(x, y).lit()) ++n;
+      return n;
+    };
+
+    UiState u;
+    Anim z;
+    z.dt = 0.0f;
+    z.t = 5.0;
+
+    ScreenManager hi;   // stays at 100% throughout: the reference
+    hi.set_screen(Screen::Brightness);
+    u.brightness = 255;
+    Framebuffer ref_hi;
+    hi.render(ref_hi, u, z);
+
+    ScreenManager lo;   // primed at 4%, for the other reference
+    lo.set_screen(Screen::Brightness);
+    UiState dim = u;
+    dim.brightness = 10;
+    Framebuffer ref_lo;
+    lo.render(ref_lo, dim, z);
+
+    CHECK(label_ink(ref_hi) != label_ink(ref_lo));  // the two really do differ
+
+    ScreenManager m3;
+    m3.set_screen(Screen::Brightness);
+    Framebuffer scratch;
+    m3.render(scratch, u, z);        // prime on 100%
+    m3.restart_with(u, TransitionKind::DiskUp);
+    u.brightness = 10;               // changed only after the manager was told
+
+    Framebuffer out;
+    m3.render(out, u, z);            // dt 0, so progress is 0 and out == from
+
+    for (int y = 1; y <= 5; ++y)
+      for (int x = kLabelX; x < kWidth; ++x) CHECK(out.get(x, y) == ref_hi.get(x, y));
+    CHECK(label_ink(out) != label_ink(ref_lo));
+  }
+
   CASE("both screens keep animating through a transition");
   ScreenManager m2;
   m2.set_screen(Screen::Status);
-  m2.go_to(Screen::Clock, TransitionKind::SlideLeft, 1.0f);
+  m2.go_to(Screen::Clock, ui, TransitionKind::SlideLeft, 1.0f);
   Framebuffer f1, f2;
   Anim s1, s2;
   s1.dt = 0.0f;

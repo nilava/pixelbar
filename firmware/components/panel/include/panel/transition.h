@@ -57,12 +57,23 @@ constexpr int dissolve_rank(int x, int y) {
 
 class ScreenManager {
  public:
-  void set_screen(Screen s);                 // no transition
-  void go_to(Screen s);                      // picks the kind semantically
-  void go_to(Screen s, TransitionKind k, float dur_s = kTransitionSeconds);
+  void set_screen(Screen s);  // no transition
 
-  // Re-runs the current screen with a dissolve, for a status change in place.
-  void restart_with(TransitionKind k, float dur_s = kTransitionSeconds);
+  // Every one of these takes the state the panel is leaving.
+  //
+  // The outgoing screen has to be drawn with the state it had when the move
+  // began, or a status change shows the new word on both sides of its own
+  // transition. Snapshotting lazily on the first transition frame does not
+  // work, because by then the caller has already written the new value into
+  // the UiState it is about to pass to render(). So the snapshot is taken
+  // here, from an argument, at the moment the caller still holds the old one.
+  void go_to(Screen s, const UiState& leaving);  // picks the kind semantically
+  void go_to(Screen s, const UiState& leaving, TransitionKind k,
+             float dur_s = kTransitionSeconds);
+
+  // Re-runs the current screen, for a change in place such as a new status.
+  void restart_with(const UiState& leaving, TransitionKind k,
+                    float dur_s = kTransitionSeconds);
 
   static TransitionKind kind_for(Screen from, Screen to);
 
@@ -77,10 +88,9 @@ class ScreenManager {
   Framebuffer from_fb_, to_fb_;
   ScreenAnim from_anim_, to_anim_;
   // The state the outgoing screen was showing when the transition began. A
-  // status change has to dissolve from the old word to the new one, so the
+  // status change has to animate from the old word to the new one, so the
   // departing screen cannot be redrawn with the new data.
   UiState from_ui_;
-  bool captured_ = false;
   Screen from_ = Screen::Booting;
   Screen to_ = Screen::Booting;
   TransitionKind kind_ = TransitionKind::None;
