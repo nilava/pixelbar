@@ -584,11 +584,31 @@ static void test_screens() {
   // 2..10, and gamma plus the default brightness rounded every one of them to
   // zero, so it was pure black on hardware. Assert the rendered bytes, not the
   // framebuffer.
+  //
+  // "Not zero" is too weak a bar, and it let the screen regress: a later change
+  // tinted the moon by dividing every channel by three, which put the peak
+  // output back down to 2 of 255 — technically lit, practically black, and
+  // this assertion passed. So the floor is a level you could actually see in a
+  // dark room, not merely a non-zero byte.
+  // The moon breathes, so the level to assert is the top of the breath rather
+  // than whatever one arbitrary phase happens to give.
   uint8_t sleep_wire[kNumLeds * 3];
-  fb.render(sleep_wire, kDefaultBrightness, kMaxMilliamps, kWiring);
-  int nonzero = 0;
-  for (int i = 0; i < kNumLeds * 3; ++i) nonzero += sleep_wire[i] ? 1 : 0;
+  int nonzero = 0, peak = 0;
+  ScreenAnim sleep_anim;
+  Anim sa;
+  sa.dt = 0.02f;
+  for (int i = 0; i < 400; ++i) {
+    sa.t = i * 0.02;
+    fb.clear();
+    draw_screen(fb, Screen::Sleep, ui, sa, sleep_anim);
+    fb.render(sleep_wire, kDefaultBrightness, kMaxMilliamps, kWiring);
+    for (int k = 0; k < kNumLeds * 3; ++k) {
+      nonzero += sleep_wire[k] ? 1 : 0;
+      if (sleep_wire[k] > peak) peak = sleep_wire[k];
+    }
+  }
   CHECK(nonzero > 0);
+  CHECK(peak >= 6);
   CHECK(fb.estimate_ma(kDefaultBrightness) < 400.0f);  // still nearly dark
 
   CASE("screen names round-trip to something printable");

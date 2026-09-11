@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "harness.h"
+#include "ui/app.h"
 #include "ui/gesture.h"
 
 using namespace ui;
@@ -578,6 +579,428 @@ void test_no_crosstalk() {
   }
 }
 
+
+// ------------------------------------------------------------------ the app
+
+// Ports backed by memory: settings live in a member, the clock is synthetic,
+// and the raw input is whatever the test last set.
+class TestPorts : public Ports {
+ public:
+  void read_raw(RawInput* out) override { *out = raw; }
+  bool load_settings(Settings* out) override {
+    if (!valid) return false;
+    *out = stored;
+    return true;
+  }
+  bool save_settings(const Settings& s) override {
+    stored = s;
+    valid = true;
+    ++saves;
+    return true;
+  }
+  bool wall_clock(int* h, int* m, int* s) override {
+    *h = 14; *m = 25; *s = 0;
+    return has_clock;
+  }
+  bool wifi_connected() override { return wifi; }
+
+  RawInput raw;
+  Settings stored;
+  bool valid = false;
+  bool has_clock = true;
+  bool wifi = false;
+  int saves = 0;
+};
+
+// Drives an App the way the firmware and the simulator do.
+class AppRig {
+ public:
+  AppRig() {
+    app.begin(ports, 0.0);
+    run(2.0f);  // past the boot screen
+  }
+  void run(float seconds) {
+    const int frames = static_cast<int>(seconds / kTick + 0.5f);
+    for (int i = 0; i < frames; ++i) {
+      app.update(kTick, t_);
+      t_ += kTick;
+    }
+  }
+  void tap(int zone) {
+    ports.raw.touch[zone] = true;
+    run(0.06f);
+    ports.raw.touch[zone] = false;
+    run(0.05f);
+  }
+  void hold(int zone, float seconds = 0.6f) {
+    ports.raw.touch[zone] = true;
+    run(seconds);
+    ports.raw.touch[zone] = false;
+    run(0.05f);
+  }
+  void chord(int a, int b, float seconds = 0.25f) {
+    ports.raw.touch[a] = true;
+    ports.raw.touch[b] = true;
+    run(seconds);
+    ports.raw.touch[a] = false;
+    ports.raw.touch[b] = false;
+    run(0.05f);
+  }
+  void turn(int detents) {
+    ports.raw.encoder_detents += detents;
+    run(0.05f);
+  }
+  void press(float seconds = 0.06f) {
+    ports.raw.encoder_sw = true;
+    run(seconds);
+    ports.raw.encoder_sw = false;
+    run(0.05f);
+  }
+  void settle() { run(1.2f); }  // long enough for any transition to finish
+
+  TestPorts ports;
+  App app;
+
+ private:
+  double t_ = 0.0;
+};
+
+void test_app_boot_and_views() {
+  CASE("the panel leaves the boot screen on its own");
+  {
+    TestPorts p;
+    App a;
+    a.begin(p, 0.0);
+    CHECK_EQ(static_cast<int>(a.screen()), static_cast<int>(panel::Screen::Booting));
+    double t = 0.0;
+    for (int i = 0; i < 300; ++i) { a.update(kTick, t); t += kTick; }
+    CHECK_EQ(static_cast<int>(a.screen()), static_cast<int>(panel::Screen::Status));
+  }
+
+  CASE("touching it during the splash only ends the splash");
+  {
+    // Reaching for a device that is still waking up must not change what it
+    // is telling the room.
+    AppRig r;  // already past boot
+    TestPorts p;
+    App a;
+    a.begin(p, 0.0);
+    double t = 0.0;
+    for (int i = 0; i < 20; ++i) { a.update(kTick, t); t += kTick; }
+    p.raw.touch[0] = true;
+    for (int i = 0; i < 8; ++i) { a.update(kTick, t); t += kTick; }
+    p.raw.touch[0] = false;
+    for (int i = 0; i < 40; ++i) { a.update(kTick, t); t += kTick; }
+    CHECK_EQ(static_cast<int>(a.state().status), static_cast<int>(panel::Status::Free));
+  }
+
+  CASE("the right pad and the knob both walk the home views, and wrap");
+  {
+    AppRig r;
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
+    r.tap(2); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Clock));
+    r.tap(2); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Timer));
+    r.tap(2); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
+
+    r.turn(1); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Clock));
+    r.turn(-1); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
+    r.turn(-1); r.settle();  // wrapping backwards
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Timer));
+  }
+
+  CASE("a swipe walks the views too, and in the direction it ran");
+  {
+    AppRig r;
+    // A drag: pads overlap and release as the finger moves on.
+    r.ports.raw.touch[0] = true; r.run(0.05f);
+    r.ports.raw.touch[1] = true; r.run(0.03f);
+    r.ports.raw.touch[0] = false; r.run(0.03f);
+    r.ports.raw.touch[2] = true; r.run(0.03f);
+    r.ports.raw.touch[1] = false; r.run(0.05f);
+    r.ports.raw.touch[2] = false; r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Clock));
+  }
+}
+
+void test_app_status() {
+  CASE("the left pad toggles between free and busy");
+  {
+    AppRig r;
+    CHECK_EQ(static_cast<int>(r.app.state().status), static_cast<int>(panel::Status::Free));
+    r.tap(0); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.state().status), static_cast<int>(panel::Status::Busy));
+    r.tap(0); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.state().status), static_cast<int>(panel::Status::Free));
+  }
+
+  CASE("a double tap lands on CALL, whatever the first tap did on the way");
+  {
+    // This is the supersede rule the recogniser is built around, seen from the
+    // other end: the first tap has already changed the status, and the second
+    // has to be an assignment that overwrites it rather than another toggle.
+    AppRig r;
+    r.tap(0);
+    r.tap(0);
+    r.settle();
+    CHECK_EQ(static_cast<int>(r.app.state().status), static_cast<int>(panel::Status::Call));
+  }
+
+  CASE("holding the right pad toggles do-not-disturb");
+  {
+    AppRig r;
+    r.hold(2); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.state().status), static_cast<int>(panel::Status::Dnd));
+    r.hold(2); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.state().status), static_cast<int>(panel::Status::Free));
+  }
+
+  CASE("a status change never leaves the panel on the wrong screen");
+  {
+    AppRig r;
+    r.tap(2); r.settle();  // go to the clock
+    r.tap(0); r.settle();  // change status from there
+    CHECK_EQ(static_cast<int>(r.app.state().status), static_cast<int>(panel::Status::Busy));
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Clock));
+  }
+}
+
+void test_app_timer() {
+  CASE("the middle pad starts and pauses, and the timer actually counts");
+  {
+    AppRig r;
+    const int start = r.app.state().timer_left_s;
+    CHECK(start > 0);
+    r.run(2.0f);
+    CHECK_EQ(r.app.state().timer_left_s, start);  // nothing until it is started
+
+    r.tap(1);
+    CHECK(r.app.state().timer_running);
+    r.run(3.0f);
+    CHECK(r.app.state().timer_left_s < start);
+    const int mid = r.app.state().timer_left_s;
+
+    r.tap(1);
+    CHECK(!r.app.state().timer_running);
+    r.run(3.0f);
+    CHECK_EQ(r.app.state().timer_left_s, mid);  // paused means paused
+  }
+
+  CASE("holding the middle pad resets it to the set length");
+  {
+    AppRig r;
+    r.tap(1);
+    r.run(5.0f);
+    CHECK(r.app.state().timer_left_s < r.app.state().timer_total_s);
+    r.hold(1);
+    CHECK(!r.app.state().timer_running);
+    CHECK_EQ(r.app.state().timer_left_s, r.app.state().timer_set_min * 60);
+  }
+}
+
+void test_app_adjust() {
+  CASE("holding the knob opens the adjusters, and pressing steps through them");
+  {
+    AppRig r;
+    CHECK_EQ(r.app.depth(), 1);
+    r.press(0.7f); r.settle();  // a press-hold
+    CHECK_EQ(r.app.depth(), 2);
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Brightness));
+    r.press(); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::ColorPick));
+    r.press(); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::TimerSet));
+    r.press(); r.settle();  // out the far end
+    CHECK_EQ(r.app.depth(), 1);
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
+  }
+
+  CASE("turning on the brightness screen changes brightness, and clamps");
+  {
+    AppRig r;
+    r.press(0.7f); r.settle();
+    const int before = r.app.state().brightness;
+    r.turn(5); r.settle();
+    CHECK(r.app.state().brightness > before);
+    for (int i = 0; i < 40; ++i) r.turn(5);
+    CHECK_EQ(r.app.state().brightness, 255);
+    for (int i = 0; i < 80; ++i) r.turn(-5);
+    CHECK(r.app.state().brightness >= 4);  // never dark enough to look broken
+  }
+
+  CASE("the colour picker commits its hue to the accent");
+  {
+    AppRig r;
+    r.press(0.7f); r.settle();
+    r.press(); r.settle();  // to ColorPick
+    const panel::RGB before = r.app.state().accent;
+    r.turn(6); r.settle();
+    const panel::RGB after = r.app.state().accent;
+    CHECK(!(before == after));
+    CHECK(after == panel::accent_from_hue(r.app.state().hue));
+  }
+
+  CASE("a shake backs out of an adjuster but does nothing at home");
+  {
+    AppRig r;
+    r.press(0.7f); r.settle();
+    CHECK_EQ(r.app.depth(), 2);
+    r.app.handle(Event(EventType::Shake), 0.0);
+    r.settle();
+    CHECK_EQ(r.app.depth(), 1);
+    const int screen_before = static_cast<int>(r.app.screen());
+    r.app.handle(Event(EventType::Shake), 0.0);
+    r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), screen_before);
+  }
+
+  CASE("press-and-turn changes brightness without leaving the screen");
+  {
+    AppRig r;
+    r.tap(2); r.settle();  // the clock
+    const int before = r.app.state().brightness;
+    r.ports.raw.encoder_sw = true;
+    r.run(0.05f);
+    r.turn(4);
+    r.ports.raw.encoder_sw = false;
+    r.settle();
+    CHECK(r.app.state().brightness > before);
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Clock));
+  }
+}
+
+void test_app_sleep_and_settings() {
+  CASE("the left and right pads together sleep it, and anything wakes it");
+  {
+    AppRig r;
+    r.chord(0, 2); r.settle();
+    CHECK(r.app.asleep());
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Sleep));
+    r.tap(1); r.settle();
+    CHECK(!r.app.asleep());
+  }
+
+  CASE("the gesture that wakes it is swallowed");
+  {
+    // Reaching for a sleeping panel must not also change what it is saying.
+    AppRig r;
+    r.chord(0, 2); r.settle();
+    const int status_before = static_cast<int>(r.app.state().status);
+    r.tap(0); r.settle();
+    CHECK(!r.app.asleep());
+    CHECK_EQ(static_cast<int>(r.app.state().status), status_before);
+  }
+
+  CASE("laying it flat sleeps it and standing it up wakes it");
+  {
+    AppRig r;
+    r.ports.raw.motion_valid = true;
+    r.ports.raw.ax = 0.0f; r.ports.raw.ay = 1.0f; r.ports.raw.az = 0.0f;
+    r.run(2.0f);
+    r.ports.raw.ay = 0.0f; r.ports.raw.az = 1.0f;  // laid down
+    r.run(1.5f);
+    CHECK(r.app.asleep());
+    r.ports.raw.ay = 1.0f; r.ports.raw.az = 0.0f;  // stood back up
+    r.run(1.5f);
+    CHECK(!r.app.asleep());
+  }
+
+  CASE("settings are written once a knob stops moving, not once per detent");
+  {
+    AppRig r;
+    r.press(0.7f); r.settle();
+    r.ports.saves = 0;
+    for (int i = 0; i < 20; ++i) r.turn(1);  // a sweep
+    CHECK_EQ(r.ports.saves, 0);              // nothing yet
+    CHECK(r.app.save_pending());
+    r.run(2.0f);
+    CHECK_EQ(r.ports.saves, 1);              // exactly one write for the sweep
+    CHECK(!r.app.save_pending());
+  }
+
+  CASE("what was saved comes back on the next boot");
+  {
+    AppRig r;
+    r.press(0.7f); r.settle();
+    for (int i = 0; i < 10; ++i) r.turn(1);
+    r.run(2.0f);
+    const int saved = r.app.state().brightness;
+
+    App again;
+    again.begin(r.ports, 0.0);
+    CHECK_EQ(again.state().brightness, saved);
+  }
+
+  CASE("a blob from the future is refused rather than reinterpreted");
+  {
+    TestPorts p;
+    p.stored.version = Settings::kVersion + 7;
+    p.stored.brightness = 200;
+    p.valid = true;
+    App a;
+    a.begin(p, 0.0);
+    CHECK_EQ(a.state().brightness, Settings{}.brightness);  // defaults, not 200
+  }
+
+  CASE("a corrupt blob is clamped into something usable");
+  {
+    TestPorts p;
+    p.stored.version = Settings::kVersion;
+    p.stored.brightness = 0;      // a panel that looks dead
+    p.stored.work_min = 0;        // a timer that ends instantly
+    p.stored.hue = 40.0f;         // nonsense
+    p.valid = true;
+    App a;
+    a.begin(p, 0.0);
+    CHECK(a.state().brightness >= 4);
+    CHECK(a.settings().work_min >= 1);
+    CHECK(a.state().hue >= 0.0f && a.state().hue <= 1.0f);
+  }
+
+  CASE("locking the pads silences them but leaves the knob alone");
+  {
+    AppRig r;
+    Settings s = r.app.settings();
+    s.touch_locked = true;
+    r.ports.stored = s;
+    r.ports.valid = true;
+    App a;
+    a.begin(r.ports, 0.0);
+    double t = 0.0;
+    for (int i = 0; i < 300; ++i) { a.update(kTick, t); t += kTick; }
+
+    r.ports.raw.touch[0] = true;
+    for (int i = 0; i < 12; ++i) { a.update(kTick, t); t += kTick; }
+    r.ports.raw.touch[0] = false;
+    for (int i = 0; i < 12; ++i) { a.update(kTick, t); t += kTick; }
+    CHECK_EQ(static_cast<int>(a.state().status), static_cast<int>(panel::Status::Free));
+
+    r.ports.raw.encoder_detents += 1;
+    for (int i = 0; i < 200; ++i) { a.update(kTick, t); t += kTick; }
+    CHECK_EQ(static_cast<int>(a.screen()), static_cast<int>(panel::Screen::Clock));
+  }
+}
+
+void test_nav_inverse() {
+  CASE("every transition that has a direction knows how to come back");
+  {
+    using panel::TransitionKind;
+    CHECK_EQ(static_cast<int>(inverse_of(TransitionKind::WipeUp)),
+             static_cast<int>(TransitionKind::WipeDown));
+    CHECK_EQ(static_cast<int>(inverse_of(TransitionKind::DiskUp)),
+             static_cast<int>(TransitionKind::DiskDown));
+    // And inverting twice is the identity, for every kind there is.
+    for (int k = 0; k < static_cast<int>(TransitionKind::Count); ++k) {
+      const auto kind = static_cast<TransitionKind>(k);
+      CHECK_EQ(static_cast<int>(inverse_of(inverse_of(kind))), k);
+    }
+  }
+}
+
 }  // namespace
 
 void run_ui_tests() {
@@ -589,4 +1012,10 @@ void run_ui_tests() {
   test_encoder();
   test_motion();
   test_no_crosstalk();
+  test_app_boot_and_views();
+  test_app_status();
+  test_app_timer();
+  test_app_adjust();
+  test_app_sleep_and_settings();
+  test_nav_inverse();
 }

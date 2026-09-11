@@ -348,10 +348,20 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       // 60 the gamma curve and the default brightness together round the
       // output to zero, so the old 2..10 breathe never lit an LED at all.
       const float k = 0.35f + 0.65f * a.wave(6.0f);
-      const uint8_t v = static_cast<uint8_t>(70 + 50 * k);
+      // 80..130 rather than 70..120: at the default brightness of 48 the
+      // bottom of the old range rendered to 3 of 255, which is a moon you have
+      // to hunt for in a dark room.
+      const uint8_t v = static_cast<uint8_t>(80 + 50 * k);
+      // The moon is cool rather than white, but the tint is applied by holding
+      // the *brightest* channel at v and pulling the others down — not by
+      // scaling all three. Dividing every channel by three, as this did, put
+      // the whole thing back under the floor the line above exists to clear,
+      // and the screen went nearly black again while the comment still claimed
+      // otherwise.
+      const RGB moon(static_cast<uint8_t>(v * 2 / 3), static_cast<uint8_t>(v * 2 / 3), v);
       const float drift = a.phase(60.0f) * kWidth;
-      draw_icon_aa(fb, drift - 4.0f, 0.0f, kIconMoon, RGB(v / 3, v / 3, v / 2));
-      draw_icon_aa(fb, drift - 4.0f + kWidth, 0.0f, kIconMoon, RGB(v / 3, v / 3, v / 2));
+      draw_icon_aa(fb, drift - 4.0f, 0.0f, kIconMoon, moon);
+      draw_icon_aa(fb, drift - 4.0f + kWidth, 0.0f, kIconMoon, moon);
       break;
     }
 

@@ -188,6 +188,7 @@ The whole drawing layer is free of ESP-IDF, so it builds and runs on a laptop.
 
 ```bash
 ./test/run.sh                                    # builds and runs the tests
+./test/sim.sh                                    # drive the panel from your keyboard
 ./build-host/preview docs/preview docs/screens   # still sheets
 python3 tools/ppm2png.py docs/preview
 python3 tools/ppm2png.py docs/screens
@@ -198,6 +199,19 @@ python3 tools/ppm2gif.py docs/anim               # needs Pillow
 
 A still image cannot show whether motion is smooth, so the animation is
 verified by watching the GIFs rather than by reading a description of them.
+
+`./test/sim.sh` goes further: it runs the real state machine, the real gesture
+recogniser and the real renderer at 100 fps in your terminal, and lets you drive
+them from the keyboard — `a s d` tap the pads, `A S D` hold them, `e` swipes,
+`, .` turn the knob, space presses it, `f` lays the panel flat. Keys become raw
+pad levels and encoder counts rather than events, so the recogniser is exercised
+for real: a tap is a pad going down and coming back up over several frames, and
+a swipe is a drag with the overlaps a finger actually makes.
+
+It draws out of the same GRB wire bytes that would go down the data line,
+through the same LED mapping and gamma table, so a mapping or gamma mistake
+shows up there rather than on a soldered panel. `./build-host/sim --selftest`
+runs a scripted sequence with no terminal, for when you want it in a pipe.
 
 The preview reads back the same GRB bytes that would go out on the wire,
 through the same mapping, so a gamma or mapping mistake shows up on screen
