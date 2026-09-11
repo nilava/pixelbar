@@ -56,15 +56,24 @@ class Quadrature {
     const int8_t step = kQuadTable[(state_ << 2) | now];
     state_ = now;
     if (step == 2) {
-      ++illegal_;  // both lines moved between samples: the direction is unknown
-      // And throw away the quarter-steps gathered so far. They were counted on
-      // the assumption of an unbroken sequence, and an illegal transition says
-      // that assumption is gone — keeping them lets a burst of noise walk the
-      // accumulator across the detent threshold and invent a click nobody
-      // made. Measured on a bench board with the encoder module's pull-ups
-      // unpowered: 32 illegal transitions and a phantom detent inside twelve
-      // seconds of sitting still.
-      sub_ = 0;
+      // Both lines moved between samples, so the direction of that step is
+      // unknown and it cannot be counted.
+      ++illegal_;
+      // The quarter-steps gathered before it are still good, though, and they
+      // are deliberately kept.
+      //
+      // Discarding them was tried, to stop a burst of noise walking the
+      // accumulator across the detent threshold and inventing a click. It did
+      // not work and it cost real movement. It did not work because the noise
+      // it was aimed at — an encoder module whose pull-ups were unpowered —
+      // drifts slowly and produces perfectly legal Gray code, so there was no
+      // illegal transition to catch it by; that fault was in the wiring and
+      // has been fixed in the wiring. And it cost movement because at speed an
+      // illegal transition does not mean noise at all: it means the interrupt
+      // missed an edge because the knob is being turned hard. Throwing away
+      // three quarter-steps there loses a detent the user actually turned,
+      // precisely when they are spinning fastest. The knob felt unresponsive,
+      // and it was.
       return 0;
     }
     sub_ = static_cast<int8_t>(sub_ + step);

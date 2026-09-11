@@ -20,9 +20,9 @@ The authoritative copy of the GPIO numbers is
 | I²C `SDA` | 6 | MPU-6050 |
 | I²C `SCL` | 7 | |
 | MPU-6050 `INT` | 1 | optional; wake on tap |
-| Encoder `A` | 20 | |
-| Encoder `B` | 21 | |
-| Encoder switch | 0 | to ground, internal pull-up |
+| Encoder `A` | 20 | 10 kΩ pull-up to 3V3 |
+| Encoder `B` | 21 | 10 kΩ pull-up to 3V3 |
+| Encoder switch | 0 | to ground; 10 kΩ pull-up to 3V3 |
 
 ## Why these pins
 
@@ -95,28 +95,52 @@ were observed on the bench:
 Powering `+` from 3V3 puts strong 10 kΩ pull-ups on all three lines and makes
 the coupling node a supply rail instead of an antenna.
 
-### Once the encoder is off the breakout board
+## The bare EC11, and the three resistors it needs
 
-The 3V3 wire is needed only while the module is still in the circuit. A bare
-EC11 is the switch and the two contacts and nothing else — no resistors, so no
-shared node for the three lines to couple through. The fault above is removed
-along with the board it lived on, and the internal pull-ups hold all three
-lines by themselves. There is no `+` to connect, and nothing is lost.
+This is the final build: the encoder desoldered from its breakout board, or
+bought bare. A bare EC11 is the switch and the two contacts and nothing else —
+five pins, no power pin, and **no resistors**. There is no `+` to connect and
+nothing is lost by its absence: the shared node that caused the fault above is
+removed along with the board it lived on.
 
-One thing worth doing anyway, because it is three resistors and it closes a
-question that will otherwise only open once everything is glued into a case:
-**fit 10 kΩ pull-ups from `A`, `B` and `SW` to 3V3.** The internal pull-ups are
-around 45 kΩ, which is weak enough that a high-impedance line picks up noise
-from its surroundings — and the surroundings here are 192 WS2812s switching a
-few centimetres away on wires that are longer in the assembled case than on the
-bench. That is a different mechanism from the coupling fault above and it will
-not show up until assembly, which is the worst time to find it.
+| EC11 pin | Goes to | |
+| --- | --- | --- |
+| `A` | **GPIO20** | quadrature A, **and** 10 kΩ to 3V3 |
+| `C` (common, centre of the three) | GND | |
+| `B` | **GPIO21** | quadrature B, **and** 10 kΩ to 3V3 |
+| switch pin 1 | **GPIO0** | **and** 10 kΩ to 3V3 |
+| switch pin 2 | GND | |
+
+### Fit the three 10 kΩ pull-ups
+
+One from each of `A`, `B` and the switch pin to **3V3**. Not optional, and not
+the same thing as the module's resistors — those are gone with the module.
+
+The firmware enables the ESP32-C3's internal pull-ups, and on a bench with
+short wires those alone will appear to work. They are around 45 kΩ, which is
+weak enough that the line sits at a high impedance between contact closures,
+and a high-impedance line a few centimetres from 192 WS2812s switching at
+100 Hz is an antenna. The wires are also longer in the assembled case than on
+the bench, which makes it worse exactly where it is hardest to get at.
+
+This is a different mechanism from the coupling fault above — pickup on a weak
+pull-up, rather than three lines tied through an undriven node — and it shares
+the same symptom, which is input nobody made. 10 kΩ lowers the impedance by
+more than four times and settles it. Three resistors, fitted before the case
+closes, against a fault that otherwise surfaces only after it has.
+
+The switch pull-up matters as much as the two quadrature ones. The firmware
+carries guards against a disturbed switch line — it will not read the switch
+while the knob is moving, and it rejects any contact shorter than a finger can
+make — and those guards cost responsiveness. They exist to survive bad
+signals, not to excuse them.
 
 ### If the direction comes out backwards
 
-Swap `S1` and `S2`. Which line is A and which is B only sets the sense of
-rotation, and getting it the wrong way round is the expected outcome of a
-coin flip rather than a mistake.
+Swap the two quadrature lines — `S1` and `S2` on the module, `A` and `B` on a
+bare EC11. Which line is which only sets the sense of rotation, and getting it
+the wrong way round is the expected outcome of a coin flip rather than a
+mistake.
 
 ### The module will not fit the case
 

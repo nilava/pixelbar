@@ -122,24 +122,27 @@ void test_quadrature() {
     CHECK_EQ(r.illegal(), 0);
   }
 
-  CASE("an illegal transition throws away the quarter-steps before it");
+  CASE("an illegal transition is not counted, but does not lose the turn");
   {
-    // Three clean quarters, then both lines change at once — which cannot
-    // happen on a real turn. The position is unknown from there, so the three
-    // quarters must not be allowed to stand: if they do, one more edge of
-    // noise completes a detent that nobody turned. This is the phantom
-    // navigation seen on a board whose encoder pull-ups were unpowered.
+    // At speed, both lines appearing to change at once means a missed edge,
+    // not noise — the knob is being turned faster than the samples arrive. The
+    // step itself cannot be counted because its direction is unknown, but the
+    // quarter-steps either side of it are real movement and must survive it.
+    // Discarding them drops a detent out of every fast sweep, which is what
+    // an unresponsive knob actually feels like.
     Quadrature q;
     q.update(false, false);
     q.update(true, false);   // one quarter
     q.update(true, true);    // two
     q.update(false, true);   // three
     CHECK_EQ(q.detents(), 0);
-    q.update(true, false);   // both lines move: illegal
+    q.update(true, false);   // both lines move: illegal, uncounted
     CHECK_EQ(q.illegal(), 1u);
-    // One more legal quarter must not now complete a detent.
-    CHECK_EQ(q.update(true, true), 0);
     CHECK_EQ(q.detents(), 0);
+    // The three quarters still stand, so the next one completes the detent
+    // the user turned.
+    CHECK_EQ(q.update(true, true), 1);
+    CHECK_EQ(q.detents(), 1);
   }
 
   CASE("a partial turn produces no detent, and does not lose its place");
