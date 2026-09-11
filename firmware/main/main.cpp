@@ -147,6 +147,16 @@ extern "C" void app_main(void) {
       // `board` knows nothing about WiFi and `ui` knows nothing about either.
       ports.set_wifi(net_connected());
       ports.set_time_valid(net_time_valid());
+      {
+        // The two enums are deliberately separate — `ui` may not include an
+        // IDF header — so this is the one place they are mapped, and it is
+        // three lines rather than a shared header that would couple them.
+        const net_mode_t m = net_mode();
+        ports.set_net(m == NET_MODE_ONLINE  ? ui::Ports::NetMode::Online
+                      : m == NET_MODE_JOINING ? ui::Ports::NetMode::Joining
+                                              : ui::Ports::NetMode::Setup,
+                      m == NET_MODE_SETUP ? net_setup_ssid() : net_ip());
+      }
 
       ports.advance(a.dt);
       app.update(a.dt, a.t);

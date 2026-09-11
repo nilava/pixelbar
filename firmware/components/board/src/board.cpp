@@ -274,5 +274,7 @@ bool DevicePorts::wall_clock(int* h, int* m, int* s) {
 }
 
 bool DevicePorts::wifi_connected() { return wifi_; }
+ui::Ports::NetMode DevicePorts::net_mode() { return net_mode_; }
+const char* DevicePorts::net_text() { return net_text_; }
 
 }  // namespace board

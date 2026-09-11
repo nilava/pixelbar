@@ -5,11 +5,13 @@
 # except a status struct. If someone later includes a model header in here,
 # this line is what fails.
 idf_component_register(
-    SRCS "src/net.c"
+    SRCS "src/net.c" "src/creds.c" "src/captive_dns.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "../../main"
     REQUIRES esp_wifi esp_netif esp_event esp_http_server esp_timer
-    PRIV_REQUIRES nvs_flash)
+    # lwip for the captive-portal DNS socket, nvs_flash for the credentials.
+    PRIV_REQUIRES nvs_flash lwip
+)
 
 # The page is gzipped at build time and linked into the image. There is no
 # filesystem partition to put it in: partitions.csv already spends 3.5 MB of a

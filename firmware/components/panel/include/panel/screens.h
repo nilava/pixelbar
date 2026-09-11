@@ -56,6 +56,10 @@ enum class Screen : uint8_t {
   TimerSet,    // encoder adjust
   Sleep,
   Booting,
+  // The network, when it needs something from you. Not in the home carousel:
+  // these are states the device is in, not views you choose between.
+  WifiSetup,  // no credentials: join this network and open the page
+  WifiInfo,   // the address, so you can reach the page from your own network
   Count,
 };
 
@@ -97,6 +101,11 @@ struct UiState {
   // clock that is confidently wrong is worse than one that admits it is
   // waiting.
   bool time_valid = false;
+
+  // The text the network screens marquee: the setup SSID to join, or the
+  // address to visit. One field because only one of them is ever on screen,
+  // and the screen itself says which it is.
+  const char* net_text = "";
   bool wifi_connected = false;
 };
 

@@ -29,6 +29,16 @@ struct Ports {
   virtual bool wall_clock(int* h, int* m, int* s) { return false; }
 
   virtual bool wifi_connected() { return false; }
+
+  // What the device is doing about the network. Declared here rather than
+  // taken from net.h because nothing in `ui` may include an ESP-IDF header —
+  // the values are the same three states, and the device side maps between
+  // them.
+  enum class NetMode : uint8_t { Setup, Joining, Online };
+  virtual NetMode net_mode() { return NetMode::Online; }
+  // The setup SSID to join, or the address to visit, depending on the mode.
+  // Must outlive the frame; on the device it is a static buffer in `net`.
+  virtual const char* net_text() { return ""; }
 };
 
 }  // namespace ui

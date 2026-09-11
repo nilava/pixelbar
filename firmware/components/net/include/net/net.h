@@ -56,9 +56,24 @@ typedef struct {
   uint32_t illegal;
 } net_status_t;
 
+// What the device is doing about the network. The panel draws a different
+// screen for each, and they are the only three states worth distinguishing:
+// either you need to be told how to set it up, or it is working on it, or it
+// is done.
+typedef enum {
+  NET_MODE_SETUP,    // no stored credentials: the setup AP is up
+  NET_MODE_JOINING,  // credentials stored, trying to associate
+  NET_MODE_ONLINE,   // associated, with an address
+} net_mode_t;
+
 // Brings up WiFi and, once it has an address, the HTTP server. Returns as soon
 // as the attempt has started: the render loop must not wait for a network.
 esp_err_t net_start(void);
+
+net_mode_t net_mode(void);
+// The setup network's name, e.g. "PIXELBAR-A3F2". Empty unless in setup mode;
+// this is what the panel tells you to join.
+const char* net_setup_ssid(void);
 
 // True once there is an address. What the panel shows while there is not.
 bool net_connected(void);

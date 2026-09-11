@@ -93,6 +93,8 @@ const char* screen_name(Screen s) {
     case Screen::TimerSet: return "timerset";
     case Screen::Sleep: return "sleep";
     case Screen::Booting: return "booting";
+    case Screen::WifiSetup: return "wifisetup";
+    case Screen::WifiInfo: return "wifiinfo";
     default: return "?";
   }
 }
@@ -551,6 +553,51 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       const float drift = a.phase(60.0f) * kWidth;
       draw_icon_aa(fb, drift - 4.0f, 0.0f, kIconMoon, moon);
       draw_icon_aa(fb, drift - 4.0f + kWidth, 0.0f, kIconMoon, moon);
+      break;
+    }
+
+    case Screen::WifiSetup:
+    case Screen::WifiInfo: {
+      // Both screens are a word and a marquee, and the only difference is
+      // which word and what colour. Setup is amber because it wants something
+      // from you; the address is the accent because it is just information.
+      const bool setup = (s == Screen::WifiSetup);
+      const RGB tint = setup ? RGB(255, 150, 30) : ui.accent;
+
+      // The signal arcs, drawn at the left as a fixed mark so the marquee has
+      // something to be beside rather than floating alone. In setup they climb
+      // and reset, which reads as waiting; on the info screen all three stand,
+      // because by then it is connected.
+      const int lit = setup ? 1 + static_cast<int>(a.phase(1.2f) * 3.0f) % 3 : 3;
+      for (int arc = 0; arc < 3; ++arc) {
+        const RGB c = (arc <= lit) ? tint : tint.scaled(28);
+        // A quarter-circle of radius 2/4/6 about the bottom-left corner, which
+        // in six columns is the most recognisable WiFi mark that fits.
+        const int r = 2 + arc * 2;
+        for (int i = 0; i <= r; ++i) {
+          const float th = 1.5708f * (float)i / (float)r;
+          const int x = static_cast<int>(r * std::sin(th) + 0.5f);
+          const int y = 7 - static_cast<int>(r * std::cos(th) + 0.5f);
+          fb.set(x, y, c);
+        }
+      }
+
+      // The text scrolls because it never fits: an SSID is up to 32 characters
+      // and a dotted quad is fifteen, against a panel seventeen pixels wide
+      // once the mark has taken its six.
+      const char* text = ui.net_text && ui.net_text[0] ? ui.net_text : "...";
+      const int w = mini_measure_text(text);
+      const int box = kWidth - 8;
+      if (w <= box) {
+        mini_draw_text(fb, 8 + (box - w) / 2, 1, text, tint);
+      } else {
+        // One pass every few seconds with a gap, rather than a continuous
+        // belt: a name you are trying to read off a shelf needs to start
+        // somewhere, and a loop with no beginning is hard to catch.
+        const float span = static_cast<float>(w + box);
+        const float x = static_cast<float>(box) - a.phase(span / 9.0f) * span;
+        mini_draw_text_aa(fb, 8.0f + x, 1, text, tint, 8, kWidth);
+      }
       break;
     }
 

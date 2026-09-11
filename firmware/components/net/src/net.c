@@ -14,10 +14,22 @@
 #include "esp_sntp.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "captive_dns.h"
+#include "creds.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "secrets.h"
+
+// Both are optional: provisioning is the ordinary path and these are only a
+// seed for a board on the bench. A secrets.h predating provisioning defines
+// them, a fresh one leaves them empty, and neither needs to be edited.
+#ifndef PIXELBAR_WIFI_SSID
+#define PIXELBAR_WIFI_SSID ""
+#endif
+#ifndef PIXELBAR_WIFI_PASS
+#define PIXELBAR_WIFI_PASS ""
+#endif
 
 static const char* TAG = "net";
 
@@ -79,7 +91,90 @@ static int s_retries = 0;
 static esp_timer_handle_t s_retry_timer = NULL;
 static bool s_scanning = false;
 
+// ------------------------------------------------------------- provisioning
+
+// What the device is doing about the network, for the panel and the page.
+static net_mode_t s_mode = NET_MODE_SETUP;
+// The setup network's own name, so the panel can show what to join.
+static char s_ap_ssid[24] = {0};
+
+// A join attempted from the setup page, as opposed to the one we do at boot.
+// While this is set, a success stores the credentials and a failure is
+// reported back to the page rather than retried forever.
+static bool s_trying = false;
+static char s_try_ssid[33] = {0};
+static char s_try_pass[65] = {0};
+// What the page polls for. Cleared when a new attempt starts.
+static char s_try_error[48] = {0};
+
+// Dropping the setup AP is deferred so the page has a moment to read the new
+// address before the network it is asking over disappears underneath it.
+static esp_timer_handle_t s_ap_down_timer = NULL;
+
+// How many boot-time join failures before falling back to the setup AP.
+//
+// Without this a device that moves house, or whose password changes, retries
+// an unreachable network forever with no way in: the web page needs the
+// network to be reachable, and the panel cannot type a password. Six attempts
+// is about twenty seconds with the backoff below.
+#define NET_MAX_BOOT_RETRIES 6
+
+net_mode_t net_mode(void) { return s_mode; }
+const char* net_setup_ssid(void) { return s_ap_ssid; }
+
 static void retry_connect(void* arg) { esp_wifi_connect(); }
+
+// ------------------------------------------------------------ the setup AP
+
+static esp_netif_t* s_ap_netif = NULL;
+
+// Open, and deliberately so.
+//
+// A password on the setup network would have to be printed on the case or
+// shown on a 24-pixel-wide panel, which means it is not a secret; and it would
+// have to be typed before the portal could explain itself. What it protects is
+// ninety seconds of an isolated network with no route anywhere, on which the
+// only thing reachable is a form. The real credential is the one typed into
+// that form, and it travels over a link nobody else has joined.
+static void start_setup_ap(void) {
+  if (s_mode == NET_MODE_SETUP && s_ap_ssid[0]) return;  // already up
+
+  uint8_t mac[6] = {0};
+  esp_wifi_get_mac(WIFI_IF_STA, mac);
+  snprintf(s_ap_ssid, sizeof(s_ap_ssid), "PIXELBAR-%02X%02X", mac[4], mac[5]);
+
+  if (!s_ap_netif) s_ap_netif = esp_netif_create_default_wifi_ap();
+
+  wifi_config_t ap = {0};
+  strlcpy((char*)ap.ap.ssid, s_ap_ssid, sizeof(ap.ap.ssid));
+  ap.ap.ssid_len = strlen(s_ap_ssid);
+  ap.ap.channel = 1;
+  ap.ap.authmode = WIFI_AUTH_OPEN;
+  // One at a time. Two phones on a setup network is a mistake, not a use case,
+  // and refusing the second is clearer than serving both a form that fights.
+  ap.ap.max_connection = 1;
+
+  // APSTA rather than AP: the station half has to stay available so a
+  // credential typed into the form can be tried without tearing down the
+  // network the form arrived over.
+  esp_wifi_set_mode(WIFI_MODE_APSTA);
+  esp_wifi_set_config(WIFI_IF_AP, &ap);
+  s_mode = NET_MODE_SETUP;
+
+  esp_netif_ip_info_t ip;
+  esp_netif_get_ip_info(s_ap_netif, &ip);
+  captive_dns_start(ip.ip.addr);
+  ESP_LOGI(TAG, "setup network %s, open, at " IPSTR, s_ap_ssid, IP2STR(&ip.ip));
+}
+
+// Called on a timer once a join has succeeded, never straight from the event.
+static void stop_setup_ap(void* arg) {
+  if (s_mode != NET_MODE_ONLINE) return;  // the join went away again
+  captive_dns_stop();
+  esp_wifi_set_mode(WIFI_MODE_STA);
+  s_ap_ssid[0] = '\0';
+  ESP_LOGI(TAG, "setup network down");
+}
 
 // ------------------------------------------------------------------ wifi
 
@@ -159,10 +254,42 @@ static void on_wifi(void* arg, esp_event_base_t base, int32_t id, void* data) {
     // firmware — including the one that reports the address when a later
     // attempt succeeds.
     if (s_scanning) return;  // the disconnect below is ours, not a failure
+
+    // A join the user just asked for from the setup page is not retried. They
+    // are standing there waiting for an answer, and the answer is that it did
+    // not work — almost always a mistyped password, which no amount of
+    // retrying will fix. Report it and stay in setup so they can try again.
+    if (s_trying) {
+      s_trying = false;
+      snprintf(s_try_error, sizeof(s_try_error), "%s", name);
+      ESP_LOGW(TAG, "setup join failed: reason %u, %s", why, name);
+      esp_wifi_set_mode(WIFI_MODE_AP);  // drop the station half, keep the portal
+      return;
+    }
+
+    // Backoff, because a tight reconnect loop is a burst of radio work and
+    // long interrupt-disabled windows several times a second, while the panel
+    // is drawing the whole time.
+    //
+    // Scheduled on a timer rather than slept for here. This runs on the shared
+    // system event task, so sleeping in it would stall every other event in the
+    // firmware — including the one that reports the address when a later
+    // attempt succeeds.
     const int delay_ms = (s_retries < 6) ? (250 << s_retries) : 30000;
-    if (s_retries < 6) ++s_retries;
+    if (s_retries < NET_MAX_BOOT_RETRIES) ++s_retries;
     ESP_LOGW(TAG, "disconnected: reason %u, %s. retrying in %d ms", why, name,
              delay_ms);
+
+    // Out of attempts on the stored network. Rather than retry something
+    // unreachable forever — a device that has moved house, or whose password
+    // changed — put the setup AP back up so there is a way to fix it. The
+    // stored credentials are kept and still retried in the background, so a
+    // network that is merely down comes back on its own.
+    if (s_mode == NET_MODE_JOINING && s_retries >= NET_MAX_BOOT_RETRIES) {
+      ESP_LOGW(TAG, "cannot reach the stored network; opening setup");
+      start_setup_ap();
+    }
+
     if (s_retry_timer) {
       esp_timer_stop(s_retry_timer);
       esp_timer_start_once(s_retry_timer, (uint64_t)delay_ms * 1000);
@@ -172,7 +299,21 @@ static void on_wifi(void* arg, esp_event_base_t base, int32_t id, void* data) {
     snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&e->ip_info.ip));
     s_connected = true;
     s_retries = 0;
+    s_mode = NET_MODE_ONLINE;
     ESP_LOGI(TAG, "connected: http://%s", s_ip);
+
+    // Credentials are stored only once they have actually worked. Saving them
+    // when the form was submitted would persist a typo and lock the device out
+    // of its own setup page on the next boot.
+    if (s_trying) {
+      s_trying = false;
+      s_try_error[0] = '\0';
+      creds_save(s_try_ssid, s_try_pass);
+      // Leave the setup AP up briefly. The page asked over it and is waiting
+      // for an answer; pulling the network out from under the reply means the
+      // user sees a failed request after a successful join.
+      if (s_ap_down_timer) esp_timer_start_once(s_ap_down_timer, 5000000);
+    }
   }
 }
 
@@ -257,20 +398,200 @@ static esp_err_t post_input(httpd_req_t* r) {
   return httpd_resp_send(r, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
 
+// Pulls a quoted string field out of the body. The same deliberately small
+// parser as field(), for the same reason: one JSON object of three keys does
+// not justify linking cJSON, and everything here is length-checked.
+static bool str_field(const char* body, const char* key, char* out, size_t cap) {
+  const char* p = strstr(body, key);
+  if (!p) return false;
+  p = strchr(p + strlen(key), ':');
+  if (!p) return false;
+  while (*p && *p != '"') ++p;
+  if (*p != '"') return false;
+  ++p;
+  size_t n = 0;
+  while (*p && *p != '"' && n + 1 < cap) {
+    // Only the escapes a password or an SSID can actually contain. Anything
+    // else is passed through as written rather than guessed at.
+    if (*p == '\\' && p[1]) {
+      ++p;
+      char c = *p;
+      if (c == 'n') c = '\n';
+      else if (c == 't') c = '\t';
+      out[n++] = c;
+      ++p;
+      continue;
+    }
+    out[n++] = *p++;
+  }
+  if (*p != '"') return false;  // ran out of buffer or out of body
+  out[n] = '\0';
+  return true;
+}
+
+// Escapes a string into a JSON value. An SSID is 32 arbitrary octets and is
+// chosen by someone else, so it can perfectly well contain a quote or a
+// backslash — and emitting it raw would produce a broken document that the
+// page fails to parse, for a network that is otherwise fine.
+static void json_escape(const char* in, char* out, size_t cap) {
+  size_t n = 0;
+  for (const unsigned char* p = (const unsigned char*)in; *p && n + 7 < cap; ++p) {
+    if (*p == '"' || *p == '\\') {
+      out[n++] = '\\';
+      out[n++] = (char)*p;
+    } else if (*p < 0x20) {
+      n += snprintf(out + n, cap - n, "\\u%04x", *p);
+    } else {
+      out[n++] = (char)*p;
+    }
+  }
+  out[n] = '\0';
+}
+
+static esp_err_t get_wifi_scan(httpd_req_t* r) {
+  // Blocking, on the server's own task. That is allowed here and not in the
+  // event handler: this task exists to wait on things, and a scan is about two
+  // seconds. The station half is disconnected first because a scan returns
+  // nothing while a join is in flight — found the hard way.
+  s_scanning = true;
+  if (s_retry_timer) esp_timer_stop(s_retry_timer);
+  esp_wifi_disconnect();
+
+  wifi_scan_config_t sc = {0};
+  const esp_err_t err = esp_wifi_scan_start(&sc, true);
+  uint16_t n = 0;
+  if (err == ESP_OK) esp_wifi_scan_get_ap_num(&n);
+  if (n > 20) n = 20;
+
+  wifi_ap_record_t recs[20];
+  if (n) esp_wifi_scan_get_ap_records(&n, recs);
+  s_scanning = false;
+
+  char buf[1280];
+  int at = snprintf(buf, sizeof(buf), "{\"networks\":[");
+  for (uint16_t i = 0; i < n; ++i) {
+    char ssid[96];
+    json_escape((const char*)recs[i].ssid, ssid, sizeof(ssid));
+    if (ssid[0] == '\0') continue;  // hidden: nothing for the user to pick
+    const int need = snprintf(NULL, 0, "%s{\"ssid\":\"%s\",\"rssi\":%d,\"open\":%s}",
+                              at > 13 ? "," : "", ssid, recs[i].rssi,
+                              recs[i].authmode == WIFI_AUTH_OPEN ? "true" : "false");
+    if (at + need + 4 > (int)sizeof(buf)) break;
+    at += snprintf(buf + at, sizeof(buf) - at,
+                   "%s{\"ssid\":\"%s\",\"rssi\":%d,\"open\":%s}",
+                   at > 13 ? "," : "", ssid, recs[i].rssi,
+                   recs[i].authmode == WIFI_AUTH_OPEN ? "true" : "false");
+  }
+  at += snprintf(buf + at, sizeof(buf) - at, "]}");
+
+  // Whatever the scan did, go back to trying the stored network.
+  if (!s_trying && s_mode != NET_MODE_SETUP) esp_wifi_connect();
+
+  httpd_resp_set_type(r, "application/json");
+  return httpd_resp_send(r, buf, at);
+}
+
+static esp_err_t post_wifi_connect(httpd_req_t* r) {
+  char body[256];
+  if (!body_of(r, body, sizeof(body))) return httpd_resp_send_500(r);
+
+  char ssid[33] = {0}, pass[65] = {0};
+  if (!str_field(body, "\"ssid\"", ssid, sizeof(ssid)) || ssid[0] == '\0') {
+    httpd_resp_set_status(r, "400 Bad Request");
+    return httpd_resp_sendstr(r, "{\"error\":\"no ssid\"}");
+  }
+  str_field(body, "\"pass\"", pass, sizeof(pass));  // absent means an open network
+
+  strlcpy(s_try_ssid, ssid, sizeof(s_try_ssid));
+  strlcpy(s_try_pass, pass, sizeof(s_try_pass));
+  s_try_error[0] = '\0';
+  s_trying = true;
+
+  wifi_config_t wc = {0};
+  strlcpy((char*)wc.sta.ssid, ssid, sizeof(wc.sta.ssid));
+  strlcpy((char*)wc.sta.password, pass, sizeof(wc.sta.password));
+  esp_wifi_set_mode(WIFI_MODE_APSTA);
+  esp_wifi_set_config(WIFI_IF_STA, &wc);
+  if (s_retry_timer) esp_timer_stop(s_retry_timer);
+  esp_wifi_disconnect();
+  esp_wifi_connect();
+
+  ESP_LOGI(TAG, "trying %s from the setup page", ssid);
+  // 202: accepted, not done. The page polls /api/wifi/status for the outcome,
+  // because a join takes seconds and holding the socket open for it would tie
+  // up the one worker this server has.
+  httpd_resp_set_status(r, "202 Accepted");
+  httpd_resp_set_type(r, "application/json");
+  return httpd_resp_sendstr(r, "{\"trying\":true}");
+}
+
+static esp_err_t get_wifi_status(httpd_req_t* r) {
+  char err[112];
+  json_escape(s_try_error, err, sizeof(err));
+  char buf[256];
+  const int n = snprintf(
+      buf, sizeof(buf),
+      "{\"mode\":\"%s\",\"trying\":%s,\"ip\":\"%s\",\"error\":\"%s\","
+      "\"setup_ssid\":\"%s\"}",
+      s_mode == NET_MODE_ONLINE ? "online"
+                                : (s_mode == NET_MODE_JOINING ? "joining" : "setup"),
+      s_trying ? "true" : "false", s_ip, err, s_ap_ssid);
+  httpd_resp_set_type(r, "application/json");
+  return httpd_resp_send(r, buf, n);
+}
+
+static esp_err_t post_wifi_forget(httpd_req_t* r) {
+  creds_clear();
+  ESP_LOGW(TAG, "credentials cleared; restarting into setup");
+  httpd_resp_set_type(r, "application/json");
+  httpd_resp_sendstr(r, "{\"forgotten\":true}");
+  // Restart rather than unwind the radio in place. This is a rare, deliberate
+  // act and a clean boot is the one path into setup that is certain to work.
+  if (s_ap_down_timer) esp_timer_stop(s_ap_down_timer);
+  esp_restart();
+  return ESP_OK;
+}
+
+// Anything unrecognised becomes a redirect to the setup page.
+//
+// This is the half of the captive portal that the DNS responder cannot do on
+// its own: the phone resolves its connectivity-check URL to us and then asks
+// for a specific path, and it is this reply that tells it there is a portal
+// here rather than an internet.
+static esp_err_t redirect_to_portal(httpd_req_t* r, httpd_err_code_t e) {
+  httpd_resp_set_status(r, "302 Found");
+  httpd_resp_set_hdr(r, "Location", "http://192.168.4.1/");
+  httpd_resp_send(r, NULL, 0);
+  return ESP_OK;
+}
+
 static esp_err_t start_server(void) {
   httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
   cfg.max_open_sockets = 4;   // fewer sockets, less RAM; nothing needs more
   cfg.lru_purge_enable = true;  // a stuck client cannot lock the panel out
-  cfg.max_uri_handlers = 8;
-  cfg.stack_size = 4096;
+  cfg.max_uri_handlers = 12;
+  // A scan builds its JSON on this stack, and so does the state handler.
+  cfg.stack_size = 5120;
   ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "httpd");
 
   const httpd_uri_t root = {"/", HTTP_GET, get_root, NULL};
   const httpd_uri_t state = {"/api/state", HTTP_GET, get_state, NULL};
   const httpd_uri_t input = {"/api/input", HTTP_POST, post_input, NULL};
+  const httpd_uri_t scan = {"/api/wifi/scan", HTTP_GET, get_wifi_scan, NULL};
+  const httpd_uri_t wstat = {"/api/wifi/status", HTTP_GET, get_wifi_status, NULL};
+  const httpd_uri_t conn = {"/api/wifi/connect", HTTP_POST, post_wifi_connect, NULL};
+  const httpd_uri_t forget = {"/api/wifi/forget", HTTP_POST, post_wifi_forget, NULL};
   httpd_register_uri_handler(s_server, &root);
   httpd_register_uri_handler(s_server, &state);
   httpd_register_uri_handler(s_server, &input);
+  httpd_register_uri_handler(s_server, &scan);
+  httpd_register_uri_handler(s_server, &wstat);
+  httpd_register_uri_handler(s_server, &conn);
+  httpd_register_uri_handler(s_server, &forget);
+  // The captive-portal half that DNS cannot do. Harmless in station mode: a
+  // wrong path on the home network redirects to a page that is not there,
+  // which is no worse than the 404 it replaces.
+  httpd_register_err_handler(s_server, HTTPD_404_NOT_FOUND, redirect_to_portal);
   return ESP_OK;
 }
 
@@ -309,6 +630,10 @@ esp_err_t net_start(void) {
                                          .name = "wifi_retry"};
   ESP_RETURN_ON_ERROR(esp_timer_create(&targs, &s_retry_timer), TAG, "retry timer");
 
+  const esp_timer_create_args_t apargs = {.callback = stop_setup_ap,
+                                          .name = "ap_down"};
+  ESP_RETURN_ON_ERROR(esp_timer_create(&apargs, &s_ap_down_timer), TAG, "ap timer");
+
   ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif");
   ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "event loop");
   esp_netif_create_default_wifi_sta();
@@ -333,9 +658,39 @@ esp_err_t net_start(void) {
                                           on_got_ip, NULL, NULL),
       TAG, "server start");
 
+  // Where the credentials come from, in order of authority.
+  //
+  // NVS first, always. If it is empty and the build carries a pair, seed NVS
+  // from it once and let NVS own them from then on — so this board keeps
+  // joining the network it already joins, and the first thing set from the
+  // page overrides the build for good. The alternative, letting the compiled
+  // pair win every boot, silently undoes provisioning on the next reflash.
+  char ssid[33] = {0}, pass[65] = {0};
+  if (!creds_load(ssid, sizeof(ssid), pass, sizeof(pass))) {
+    if (PIXELBAR_WIFI_SSID[0] != '\0') {
+      creds_save(PIXELBAR_WIFI_SSID, PIXELBAR_WIFI_PASS);
+      creds_load(ssid, sizeof(ssid), pass, sizeof(pass));
+      ESP_LOGI(TAG, "seeded credentials from the build");
+    }
+  }
+
+  if (ssid[0] == '\0') {
+    // Nothing stored and nothing compiled in. Straight to setup — and the
+    // server comes up here rather than on IP_EVENT_STA_GOT_IP, because in
+    // setup mode there will not be one.
+    ESP_LOGI(TAG, "no credentials: opening setup");
+    ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start");
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    esp_wifi_set_max_tx_power(kTxPowerQuarterDbm);
+    start_setup_ap();
+    if (start_server() == ESP_OK) ESP_LOGI(TAG, "setup page on http://192.168.4.1");
+    return ESP_OK;
+  }
+
+  s_mode = NET_MODE_JOINING;
   wifi_config_t wc = {0};
-  strncpy((char*)wc.sta.ssid, PIXELBAR_WIFI_SSID, sizeof(wc.sta.ssid) - 1);
-  strncpy((char*)wc.sta.password, PIXELBAR_WIFI_PASS, sizeof(wc.sta.password) - 1);
+  strlcpy((char*)wc.sta.ssid, ssid, sizeof(wc.sta.ssid));
+  strlcpy((char*)wc.sta.password, pass, sizeof(wc.sta.password));
   // Deliberately nothing else.
   //
   // PMF, SAE key derivation, an auth-mode floor, all-channel scanning and a

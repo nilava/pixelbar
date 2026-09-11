@@ -43,6 +43,31 @@
 <h1>Pixelbar</h1>
 <div class="sub" id="sub">connecting…</div>
 
+<div class="card" id="wifi">
+  <h2>Wi-Fi</h2>
+  <div id="wifi-state" class="hint" style="margin-top:0">checking…</div>
+  <div class="row" style="margin-top:10px">
+    <button id="scan">Scan for networks</button>
+  </div>
+  <div id="nets"></div>
+  <form id="join" hidden style="margin-top:10px">
+    <div class="hint" style="margin-bottom:6px">Joining <b id="join-ssid"></b></div>
+    <input id="pass" type="password" placeholder="Password"
+           autocomplete="off" autocapitalize="off" spellcheck="false"
+           style="width:100%;padding:12px;font:inherit;color:var(--ink);
+                  background:#1e212b;border:1px solid var(--line);border-radius:9px">
+    <div class="row" style="margin-top:8px">
+      <button type="submit">Connect</button>
+      <button type="button" id="cancel">Cancel</button>
+    </div>
+  </form>
+  <div class="row" style="margin-top:8px">
+    <button id="forget" style="flex:0 0 auto;padding:10px 12px;font-size:13px">
+      Forget this network
+    </button>
+  </div>
+</div>
+
 <div class="card">
   <h2>Touch pads</h2>
   <div class="row">
@@ -109,6 +134,80 @@
 
 <script>
 const STATUSES = ["Free","Busy","Call","DND","Away","Focus","Lunch","Meet"];
+
+// ------------------------------------------------------------------- wi-fi
+const $ = id => document.getElementById(id);
+let picked = null;
+
+// Textcontent, never innerHTML. An SSID is 32 arbitrary octets chosen by
+// whoever owns the network next door, and the one thing it must not be able
+// to do is inject markup into this page.
+function netRow(n) {
+  const b = document.createElement("button");
+  const bars = n.rssi > -55 ? "\u25cf\u25cf\u25cf" : n.rssi > -70 ? "\u25cf\u25cf\u25cb" : "\u25cf\u25cb\u25cb";
+  b.textContent = `${n.ssid}  ${bars}${n.open ? "" : " \u{1f512}"}`;
+  b.style.textAlign = "left";
+  b.onclick = () => {
+    picked = n;
+    $("join-ssid").textContent = n.ssid;
+    $("pass").value = "";
+    $("join").hidden = false;
+    if (!n.open) $("pass").focus();
+  };
+  const row = document.createElement("div");
+  row.className = "row";
+  row.style.marginTop = "6px";
+  row.appendChild(b);
+  return row;
+}
+
+$("scan").onclick = async () => {
+  $("scan").disabled = true;
+  $("scan").textContent = "Scanning…";
+  $("nets").textContent = "";
+  try {
+    const r = await (await fetch("/api/wifi/scan")).json();
+    r.networks.sort((a, b) => b.rssi - a.rssi);
+    if (!r.networks.length) $("nets").textContent = "Nothing found.";
+    r.networks.forEach(n => $("nets").appendChild(netRow(n)));
+  } catch { $("nets").textContent = "Scan failed."; }
+  $("scan").disabled = false;
+  $("scan").textContent = "Scan for networks";
+};
+
+$("cancel").onclick = () => { $("join").hidden = true; picked = null; };
+
+$("join").onsubmit = async e => {
+  e.preventDefault();
+  if (!picked) return;
+  const ssid = picked.ssid, pass = $("pass").value;
+  $("pass").value = "";
+  $("join").hidden = true;
+  $("wifi-state").textContent = `Connecting to ${ssid}…`;
+  await fetch("/api/wifi/connect",
+              {method: "POST", body: JSON.stringify({ssid, pass})}).catch(()=>{});
+};
+
+$("forget").onclick = async () => {
+  if (!confirm("Forget the stored network and restart into setup?")) return;
+  await fetch("/api/wifi/forget", {method: "POST"}).catch(()=>{});
+  $("wifi-state").textContent = "Restarting into setup…";
+};
+
+async function pollWifi() {
+  try {
+    const w = await (await fetch("/api/wifi/status")).json();
+    const el = $("wifi-state");
+    if (w.trying) el.textContent = "Connecting…";
+    else if (w.error) el.textContent = `Failed: ${w.error}. Try again.`;
+    else if (w.mode === "online") el.textContent = `Connected \u00b7 ${w.ip}`;
+    else if (w.mode === "joining") el.textContent = "Joining the stored network…";
+    else el.textContent = `Setup mode \u00b7 this is ${w.setup_ssid}`;
+  } catch {}
+}
+pollWifi();
+setInterval(pollWifi, 2000);
+
 const held = new Set();
 
 function send(body) {

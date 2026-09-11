@@ -38,6 +38,15 @@ class DevicePorts : public ui::Ports {
   bool save_settings(const ui::Settings& s) override;
   bool wall_clock(int* h, int* m, int* s) override;
   bool wifi_connected() override;
+  ui::Ports::NetMode net_mode() override;
+  const char* net_text() override;
+
+  // Pushed in from main, for the same reason as the clock: this component
+  // knows nothing about the radio.
+  void set_net(ui::Ports::NetMode m, const char* text) {
+    net_mode_ = m;
+    net_text_ = text ? text : "";
+  }
 
   // Called once a frame, before read_raw, to advance anything scheduled.
   void advance(float dt_s);
@@ -78,6 +87,8 @@ class DevicePorts : public ui::Ports {
   float virtual_press_s_ = 0.0f;
   bool wifi_ = false;
   bool time_valid_ = false;
+  ui::Ports::NetMode net_mode_ = ui::Ports::NetMode::Online;
+  const char* net_text_ = "";
   double uptime_s_ = 0.0;
 };
 

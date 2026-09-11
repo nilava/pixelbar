@@ -123,6 +123,34 @@ void App::update(float dt_s, double now_s) {
       ui_.time_valid = true;
     }
     ui_.wifi_connected = ports_->wifi_connected();
+    ui_.net_text = ports_->net_text();
+
+    // A device with nothing stored cannot be set up from the panel — there is
+    // no way to type a password into 24 pixels — so the only useful thing it
+    // can do is say which network to join. It says so once, when setup mode
+    // begins, and then gets out of the way: the screen is left like any other,
+    // and nothing drags you back to it.
+    const Ports::NetMode mode = ports_->net_mode();
+    if (mode != net_mode_) {
+      const Ports::NetMode was = net_mode_;
+      net_mode_ = mode;
+      if (!booting_) {
+        if (mode == Ports::NetMode::Setup) {
+          show_net(panel::Screen::WifiSetup);
+        } else if (mode == Ports::NetMode::Online && was == Ports::NetMode::Setup) {
+          // Setup just succeeded. Show the address for a few seconds, because
+          // it is the one thing you need next and the only place it is
+          // written down.
+          show_net(panel::Screen::WifiInfo);
+          net_info_s_ = kNetInfoSeconds;
+        }
+      }
+    }
+    // The address screen is a notice, not a destination.
+    if (net_info_s_ > 0.0f && screen() == panel::Screen::WifiInfo) {
+      net_info_s_ -= dt_s;
+      if (net_info_s_ <= 0.0f) go_home();
+    }
   }
 
   mgr_.advance(dt_s);
@@ -135,9 +163,15 @@ void App::update(float dt_s, double now_s) {
     ui_.boot_t = boot_s_;
     if (boot_s_ >= panel::kBootSeconds) {
       booting_ = false;
-      nav_[0] = NavFrame{kHomeViews[view_], TransitionKind::None};
-      mgr_.go_to(kHomeViews[view_], ui_, TransitionKind::Fade,
-                 panel::transition_seconds(TransitionKind::Fade));
+      // Straight into setup if that is where the device is: handing over to
+      // the status screen first would show a working device that is not.
+      if (net_mode_ == Ports::NetMode::Setup) {
+        show_net(panel::Screen::WifiSetup);
+      } else {
+        nav_[0] = NavFrame{kHomeViews[view_], TransitionKind::None};
+        mgr_.go_to(kHomeViews[view_], ui_, TransitionKind::Fade,
+                   panel::transition_seconds(TransitionKind::Fade));
+      }
     }
   }
 
@@ -223,6 +257,16 @@ void App::go_home() {
       nav_[0] = NavFrame{kHomeViews[view_], TransitionKind::None};
     }
   }
+}
+
+void App::show_net(panel::Screen s) {
+  // Depth one, and the nav frame set to this screen, so that pressing or
+  // turning leaves it the ordinary way. Pushing it instead would make "back"
+  // return to a screen nobody asked for.
+  depth_ = 1;
+  nav_[0] = NavFrame{s, TransitionKind::None};
+  const TransitionKind k = TransitionKind::Ignite;
+  mgr_.go_to(s, ui_, k, panel::transition_seconds(k));
 }
 
 void App::goto_view(int index, int dir) {

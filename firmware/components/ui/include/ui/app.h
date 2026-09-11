@@ -71,6 +71,11 @@ class App {
   panel::Screen screen() const { return nav_[depth_ - 1].screen; }
   int depth() const { return depth_; }
   bool asleep() const { return asleep_; }
+  // How long the address stays up after setup succeeds. Long enough to read a
+  // dotted quad off a scrolling panel and type it in, short enough that the
+  // device does not sit on a notice forever.
+  static constexpr float kNetInfoSeconds = 12.0f;
+
   bool busy() const { return mgr_.busy(); }
   float transition_progress() const { return mgr_.progress(); }
   // The screen a transition is leaving. Exposed so a test can tell a real
@@ -110,6 +115,13 @@ class App {
 
   NavFrame nav_[kNavDepth];
   int depth_ = 1;
+  // Shown, not navigated to: these are states the device is in. The nav stack
+  // is reset to depth one so that a press or a turn leaves normally rather
+  // than popping back into a screen the user never chose.
+  void show_net(panel::Screen s);
+  Ports::NetMode net_mode_ = Ports::NetMode::Online;
+  float net_info_s_ = 0.0f;
+
   int view_ = 0;  // index into kHomeViews
 
   bool asleep_ = false;
