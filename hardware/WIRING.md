@@ -4,8 +4,10 @@ Everything the ESP32-C3 SuperMini connects to, and why each pin was chosen.
 The authoritative copy of the GPIO numbers is
 [`firmware/main/pins.h`](../firmware/main/pins.h) — this file explains them.
 
-> Nothing here has been built yet. The pin map is a design, not a measurement.
-> The first job once the boards exist is the mapping calibration in the README.
+> The panel is built and its mapping is confirmed. The encoder is being wired
+> now. The touch pads and the accelerometer are not connected yet — until they
+> are, the pads are driven from the web page instead, through the same pin
+> levels a real pad would produce.
 
 ## GPIO map
 
@@ -46,6 +48,51 @@ here. The encoder must be decoded in a GPIO interrupt: polling at the 10 ms
 frame tick drops detents, because a brisk flick of 20 detents per second puts
 an edge every 12.5 ms.
 
+## The encoder module
+
+A bare EC11 has five pins and no power: three on one side (A, common, B) and
+two on the other for the switch. Most of what you can actually buy is a KY-040
+style **breakout board** instead, which adds a small PCB and labels the pins
+`GND` `+` `S1` `S2` `KEY` — or `GND` `+` `SW` `DT` `CLK`, same thing.
+
+| Module pin | Goes to | |
+| --- | --- | --- |
+| `GND` | GND | |
+| `S1` (or `CLK`) | **GPIO20** | quadrature A |
+| `S2` (or `DT`) | **GPIO21** | quadrature B |
+| `KEY` (or `SW`) | **GPIO0** | the push switch |
+| `+` (or `5V`) | **nothing** | see below |
+
+### Leave the `+` pin unconnected
+
+That pin exists only to feed two 10 kΩ pull-up resistors on the module, from
+`+` to `S1` and `S2`. The firmware enables the ESP32-C3's *internal* pull-ups
+on those pins instead, so the encoder works with four wires and the fifth is
+redundant.
+
+It is not merely redundant, though. **The ESP32-C3's GPIOs are 3.3 V and are
+not 5 V tolerant.** Wiring that pin to 5 V would pull S1, S2 and KEY up to 5 V
+through those resistors and drive 5 V straight into three GPIOs. If you want
+the module's own pull-ups for any reason, connect `+` to **3.3 V** — never 5 V.
+
+This is why the wiring has no encoder supply: the bare EC11 the enclosure is
+modelled around has no power pin at all, and the module's is one you should not
+use here.
+
+### If the direction comes out backwards
+
+Swap `S1` and `S2`. Which line is A and which is B only sets the sense of
+rotation, and getting it the wrong way round is the expected outcome of a
+coin flip rather than a mistake.
+
+### The module will not fit the case
+
+The enclosure pocket is sized for a bare EC11 lying behind the top wall, not
+for a breakout PCB. Either desolder the encoder from the module and wire it
+directly — the four connections above are the same — or switch the model to its
+`KY040_BACK` layout, which puts the module flat under board 3 with the shaft
+through the back. For bench work on jumper wires, none of this matters.
+
 ## Power
 
 ```
@@ -76,7 +123,7 @@ ESP32 GPIO10 ──330Ω──> [board 1] DOUT ──> [board 2] DOUT ──> [b
 
 How the LEDs are wired *inside* one board varies between suppliers, which is
 why `kWiring` in `firmware/components/panel/include/panel/config.h` is a config
-value and not an assumption. See "Calibrating the LED mapping" in the README.
+value and not an assumption. It is settled for this panel; see "The LED mapping" in the README.
 
 ## Physical placement
 

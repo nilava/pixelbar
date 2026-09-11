@@ -24,11 +24,54 @@ namespace ui {
 // SOC_PCNT_SUPPORTED is defined for the S3 and absent here. On the device this
 // runs in a GPIO interrupt on both edges of both lines; on the host a test
 // drives it directly. Either way it is the same four-state table.
+// Gray-code table: index is (previous << 2) | current, value is the direction.
+// Zero is "no movement"; the two entries that would mean both lines changed in
+// one sample are marked 2 and counted rather than guessed at.
+inline constexpr int8_t kQuadTable[16] = {
+    //        now: 00  01  10  11
+    /* prev 00 */   0, -1, +1,  2,
+    /* prev 01 */  +1,  0,  2, -1,
+    /* prev 10 */  -1,  2,  0, +1,
+    /* prev 11 */   2, +1, -1,  0,
+};
+
 class Quadrature {
  public:
   // One sample of the A and B lines. Returns the change in detents: +1, -1 or
   // 0. A full detent on an EC11 is four quadrature steps.
-  int update(bool a, bool b);
+  //
+  // Defined here rather than in a .cpp so the device's GPIO interrupt can
+  // inline it into IRAM. An interrupt that lives in flash stalls for the
+  // milliseconds the cache is disabled during an NVS commit, and on an encoder
+  // that shows up as detents silently going missing. The host tests exercise
+  // this same source, so there is no second copy to drift.
+  int update(bool a, bool b) {
+    const uint8_t now = static_cast<uint8_t>((a ? 2 : 0) | (b ? 1 : 0));
+    if (!primed_) {
+      primed_ = true;
+      state_ = now;
+      return 0;
+    }
+    if (now == state_) return 0;
+    const int8_t step = kQuadTable[(state_ << 2) | now];
+    state_ = now;
+    if (step == 2) {
+      ++illegal_;  // both lines moved between samples: the direction is unknown
+      return 0;
+    }
+    sub_ = static_cast<int8_t>(sub_ + step);
+    if (sub_ >= 4) {  // four quarter-steps to a detent on an EC11
+      sub_ = 0;
+      ++detents_;
+      return +1;
+    }
+    if (sub_ <= -4) {
+      sub_ = 0;
+      --detents_;
+      return -1;
+    }
+    return 0;
+  }
 
   int32_t detents() const { return detents_; }
   // Transitions that cannot happen on a clean signal — both lines changing at

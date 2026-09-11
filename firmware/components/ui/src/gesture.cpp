@@ -26,53 +26,6 @@ const char* event_name(EventType t) {
   }
 }
 
-// ------------------------------------------------------------- quadrature
-
-namespace {
-
-// Gray-code table: index is (previous << 2) | current, value is the direction.
-// Zero is "no movement"; the two entries that would mean both lines changed in
-// one sample are marked 2 and counted as illegal rather than guessed at.
-const int8_t kQuadTable[16] = {
-    //        now: 00  01  10  11
-    /* prev 00 */   0, -1, +1,  2,
-    /* prev 01 */  +1,  0,  2, -1,
-    /* prev 10 */  -1,  2,  0, +1,
-    /* prev 11 */   2, +1, -1,  0,
-};
-
-}  // namespace
-
-int Quadrature::update(bool a, bool b) {
-  const uint8_t now = static_cast<uint8_t>((a ? 2 : 0) | (b ? 1 : 0));
-  if (!primed_) {
-    primed_ = true;
-    state_ = now;
-    return 0;
-  }
-  if (now == state_) return 0;
-  const int8_t step = kQuadTable[(state_ << 2) | now];
-  state_ = now;
-  if (step == 2) {
-    // Both lines moved between samples, so the direction is unknowable.
-    ++illegal_;
-    return 0;
-  }
-  sub_ = static_cast<int8_t>(sub_ + step);
-  // Four quarter-steps to a detent on an EC11.
-  if (sub_ >= 4) {
-    sub_ = 0;
-    ++detents_;
-    return +1;
-  }
-  if (sub_ <= -4) {
-    sub_ = 0;
-    --detents_;
-    return -1;
-  }
-  return 0;
-}
-
 void Quadrature::reset() {
   state_ = 0;
   primed_ = false;

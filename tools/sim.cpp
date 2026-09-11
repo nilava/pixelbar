@@ -29,6 +29,7 @@
 #include "panel/geometry.h"
 #include "panel/renderer.h"
 #include "ui/app.h"
+#include "ui/virtual_pads.h"
 
 using namespace panel;
 
@@ -83,7 +84,8 @@ int64_t now_us() {
 class SimPorts : public ui::Ports {
  public:
   void read_raw(ui::RawInput* out) override {
-    for (int i = 0; i < ui::kZones; ++i) out->touch[i] = touch_[i] || latched_[i];
+    for (int i = 0; i < ui::kZones; ++i) out->touch[i] = false;
+    pads_.apply(out->touch, ui::kZones);
     out->encoder_sw = sw_ || sw_latched_;
     out->encoder_detents = detents_;
     out->motion_valid = true;
@@ -126,14 +128,11 @@ class SimPorts : public ui::Ports {
 
   // ---- driven by the keyboard
 
-  void tap(int zone) {
-    if (zone < 0 || zone >= ui::kZones) return;
-    touch_[zone] = true;
-    hold_frames_[zone] = 6;  // 60 ms, a realistic quick tap
-  }
+  void tap(int zone) { pads_.tap(zone); }
   void toggle_hold(int zone) {
     if (zone < 0 || zone >= ui::kZones) return;
     latched_[zone] = !latched_[zone];
+    pads_.set_held(zone, latched_[zone]);
   }
   void press(int frames = 6) {
     sw_ = true;
@@ -144,46 +143,16 @@ class SimPorts : public ui::Ports {
   void knock(float g) { jolt_pending_ = g; }
   void toggle_flat() { flat_ = !flat_; }
   void toggle_wifi() { wifi_ = !wifi_; }
-  // A finger dragged across the pads, with the overlaps a real one makes.
-  void drag(int dir) {
-    drag_dir_ = dir;
-    drag_step_ = 0;
-    drag_timer_ = 0;
-  }
+  void drag(int dir) { pads_.swipe(dir); }
 
   // Advances the scheduled input by one frame. Called before App::update.
   void advance(float dt_s) {
     uptime_s_ += dt_s;
-    for (int i = 0; i < ui::kZones; ++i) {
-      if (hold_frames_[i] > 0 && --hold_frames_[i] == 0) touch_[i] = false;
-    }
+    pads_.advance(dt_s);
     if (sw_frames_ > 0 && --sw_frames_ == 0) sw_ = false;
-
     // The jolt lasts exactly one frame, which is what a knock looks like.
     jolt_ = jolt_pending_;
     jolt_pending_ = 0.0f;
-
-    if (drag_step_ >= 0) {
-      static const int kSeqR[3] = {0, 1, 2};
-      static const int kSeqL[3] = {2, 1, 0};
-      const int* seq = drag_dir_ > 0 ? kSeqR : kSeqL;
-      // down a, (down b, up a), (down c, up b), up c
-      ++drag_timer_;
-      if (drag_timer_ == 1) {
-        touch_[seq[0]] = true;
-      } else if (drag_timer_ == 6) {
-        touch_[seq[1]] = true;
-      } else if (drag_timer_ == 9) {
-        touch_[seq[0]] = false;
-      } else if (drag_timer_ == 12) {
-        touch_[seq[2]] = true;
-      } else if (drag_timer_ == 15) {
-        touch_[seq[1]] = false;
-      } else if (drag_timer_ >= 21) {
-        touch_[seq[2]] = false;
-        drag_step_ = -1;
-      }
-    }
   }
 
   int saves() const { return saves_; }
@@ -197,16 +166,14 @@ class SimPorts : public ui::Ports {
   }
 
  private:
-  bool touch_[ui::kZones] = {false, false, false};
+  ui::VirtualPads pads_;
   bool latched_[ui::kZones] = {false, false, false};
-  int hold_frames_[ui::kZones] = {0, 0, 0};
   bool sw_ = false, sw_latched_ = false;
   int sw_frames_ = 0;
   int32_t detents_ = 0;
   float jolt_ = 0.0f, jolt_pending_ = 0.0f;
   bool flat_ = false;
   bool wifi_ = false;
-  int drag_step_ = -1, drag_timer_ = 0, drag_dir_ = 1;
   double uptime_s_ = 0.0;
   ui::Settings stored_;
   bool stored_valid_ = false;
