@@ -6,6 +6,7 @@
 #include "panel/font.h"
 #include "panel/icons.h"
 #include "panel/mini_font.h"
+#include "panel/sprite.h"
 
 namespace panel {
 namespace {
@@ -159,12 +160,46 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       const float k = (1.0f - depth) + depth * a.wave(period);
       const RGB lit = c.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
 
-      if (urgent) {
-        draw_anim_icon(fb, kIconX, 0, kAnimCall, a.t, lit);
-      } else {
-        draw_icon(fb, kIconX, 0, status_icon(ui.status), lit);
+      // A status change turns the icon and the word over where they stand,
+      // rather than dissolving the whole screen. The panel has not moved you
+      // anywhere — one fact about it changed — and an element swap says that,
+      // where a screen transition says something louder and less true.
+      if (!sa.swap.primed) {
+        sa.shown = ui.status;
+        sa.swap.primed = true;
+        sa.swap.t0 = -1000.0;
+      } else if (ui.status != sa.shown && !sa.swap.running(a.t)) {
+        sa.was = sa.shown;
+        sa.shown = ui.status;
+        sa.swap.trigger(a.t);
       }
-      mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, status_label(ui.status), lit);
+      const float u = sa.swap.u(a.t);
+
+      if (u >= 1.0f) {
+        if (urgent) {
+          draw_anim_icon(fb, kIconX, 0, kAnimCall, a.t, lit);
+        } else {
+          draw_icon(fb, kIconX, 0, status_icon(ui.status), lit);
+        }
+        mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1,
+                                status_label(ui.status), lit);
+      } else {
+        // The icon shrinks into itself in both axes; the label only squashes
+        // vertically, so the word stays legible for most of the exchange.
+        const float out = pop_out_scale(u), in = pop_in_scale(u);
+        const RGB was_c = status_color(sa.was);
+        if (out > 0.0f) {
+          draw_icon_scaled(fb, kIconX, 0, status_icon(sa.was), was_c, out, out, out);
+          mini_draw_text_squashed(fb, kLabelX, kMiniLabelBox, 1,
+                                  status_label(sa.was), was_c, out, out);
+        }
+        if (in > 0.0f) {
+          const float b = in > 1.0f ? 1.0f : in;
+          draw_icon_scaled(fb, kIconX, 0, status_icon(sa.shown), lit, in, in, b);
+          mini_draw_text_squashed(fb, kLabelX, kMiniLabelBox, 1,
+                                  status_label(sa.shown), lit, in, b);
+        }
+      }
       sheen(fb, a, 7, kLabelX, kWidth - 1, c, 6.0f);
       break;
     }

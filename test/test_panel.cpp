@@ -16,6 +16,7 @@
 #include "panel/icons.h"
 #include "panel/mini_font.h"
 #include "panel/screens.h"
+#include "panel/sprite.h"
 #include "panel/transition.h"
 
 using namespace panel;
@@ -878,6 +879,228 @@ static void test_icons() {
   CHECK_EQ(prev, kStrokeCheck.n);
 }
 
+static void test_sprite() {
+  const RGB W(255, 255, 255);
+
+  CASE("scale 1 reproduces the source exactly");
+  {
+    Framebuffer got, want;
+    draw_icon(want, 4, 0, kIconBusy, W);
+    const Sprite s = sprite_of(kIconBusy);
+    draw_sprite_scaled(got, s, 4.0f + kIconW * 0.5f, kIconH * 0.5f, 1.0f, 1.0f, W);
+    for (int y = 0; y < kHeight; ++y)
+      for (int x = 0; x < kWidth; ++x) CHECK(got.get(x, y) == want.get(x, y));
+  }
+
+  CASE("a squashed sprite keeps its peak brightness and loses its height");
+  {
+    // Normalised ink: the same colour over fewer rows, not a brighter smear.
+    const Sprite s = sprite_of(kIconBusy);
+    for (float sy : {1.0f, 0.6f, 0.3f, 0.1f}) {
+      Framebuffer fb;
+      draw_sprite_scaled(fb, s, 12.0f, 4.0f, 1.0f, sy, W, 1.0f);
+      int peak = 0, rows = 0;
+      for (int y = 0; y < kHeight; ++y) {
+        int row_peak = 0;
+        for (int x = 0; x < kWidth; ++x) {
+          const int v = fb.get(x, y).r;
+          if (v > row_peak) row_peak = v;
+        }
+        if (row_peak > 8) ++rows;
+        if (row_peak > peak) peak = row_peak;
+      }
+      CHECK(peak >= 250);     // never dimmer than the source
+      CHECK(rows <= kIconH);  // never taller than the source
+      // Genuinely collapsed: the ink spans sy of the height, plus at most the
+      // one extra row it straddles when the edges do not land on a boundary.
+      const int expect = static_cast<int>(std::ceil(kIconH * sy)) + 1;
+      CHECK(rows <= expect);
+    }
+  }
+
+  CASE("conserved ink keeps the total instead of the peak");
+  {
+    const Sprite s = sprite_of(kIconBusy);
+    Framebuffer norm, cons;
+    draw_sprite_scaled(norm, s, 12.0f, 4.0f, 1.0f, 0.25f, W, 1.0f, 0, kHeight,
+                       Ink::Normalised);
+    draw_sprite_scaled(cons, s, 12.0f, 4.0f, 1.0f, 0.25f, W, 1.0f, 0, kHeight,
+                       Ink::Conserved);
+    long tn = 0, tc = 0;
+    for (int y = 0; y < kHeight; ++y)
+      for (int x = 0; x < kWidth; ++x) { tn += norm.get(x, y).r; tc += cons.get(x, y).r; }
+    CHECK(tc < tn);  // conserving at a quarter height means a quarter of the ink
+  }
+
+  CASE("a zero scale draws nothing");
+  {
+    Framebuffer fb;
+    const Sprite s = sprite_of(kIconBusy);
+    draw_sprite_scaled(fb, s, 12.0f, 4.0f, 1.0f, 0.0f, W);
+    draw_sprite_scaled(fb, s, 12.0f, 4.0f, 0.0f, 1.0f, W);
+    for (int y = 0; y < kHeight; ++y)
+      for (int x = 0; x < kWidth; ++x) CHECK(!fb.get(x, y).lit());
+  }
+
+  CASE("the clip band is never crossed");
+  {
+    const Sprite s = sprite_of(kIconBusy);
+    for (int k = 0; k <= 20; ++k) {
+      Framebuffer fb;
+      const float cy = static_cast<float>(k) * 0.4f;  // slide it right across
+      draw_sprite_scaled(fb, s, 12.0f, cy, 1.0f, 1.0f, W, 1.0f, 2, 6);
+      for (int x = 0; x < kWidth; ++x) {
+        CHECK(!fb.get(x, 0).lit());
+        CHECK(!fb.get(x, 1).lit());
+        CHECK(!fb.get(x, 6).lit());
+        CHECK(!fb.get(x, 7).lit());
+      }
+    }
+  }
+
+  CASE("rotating by a whole number of turns is the identity");
+  {
+    const Sprite s = sprite_of(kIconBusy);
+    Framebuffer zero, one;
+    draw_sprite_rotated(zero, s, 12.0f, 4.0f, 0.0f, W);
+    draw_sprite_rotated(one, s, 12.0f, 4.0f, 1.0f, W);
+    for (int y = 0; y < kHeight; ++y)
+      for (int x = 0; x < kWidth; ++x) {
+        const int a = zero.get(x, y).r, b = one.get(x, y).r;
+        CHECK(std::abs(a - b) <= 2);
+      }
+  }
+
+  CASE("a rotating icon keeps roughly the same amount of ink lit");
+  {
+    // If the ink collapses at some angles the icon strobes as it turns.
+    const Sprite s = sprite_of(kIconBusy);
+    long first = -1;
+    for (int k = 0; k < 16; ++k) {
+      Framebuffer fb;
+      draw_sprite_rotated(fb, s, 12.0f, 4.0f, static_cast<float>(k) / 16.0f, W);
+      long total = 0;
+      for (int y = 0; y < kHeight; ++y)
+        for (int x = 0; x < kWidth; ++x) total += fb.get(x, y).r;
+      if (first < 0) first = total;
+      CHECK(total > first / 2);
+      CHECK(total < first * 2);
+    }
+  }
+
+  CASE("the spin scale is the cosine and the brightness never reaches zero");
+  {
+    CHECK(std::fabs(spin_face_scale(0.0f) - 1.0f) < 0.01f);
+    CHECK(spin_face_scale(0.25f) < 0.01f);
+    CHECK(std::fabs(spin_face_scale(0.5f) - 1.0f) < 0.01f);
+    for (int k = 0; k <= 40; ++k) {
+      const float t = static_cast<float>(k) / 80.0f;
+      CHECK(spin_face_bright(t) >= 0.54f);
+      CHECK(spin_face_bright(t) <= 1.001f);
+    }
+  }
+
+  CASE("the pop hands over exactly once, and lands on 1");
+  {
+    CHECK(std::fabs(pop_out_scale(0.0f) - 1.0f) < 1e-5f);
+    CHECK(pop_out_scale(kPopSwapPoint) == 0.0f);
+    CHECK(pop_in_scale(kPopSwapPoint) == 0.0f);
+    CHECK(std::fabs(pop_in_scale(1.0f) - 1.0f) < 1e-5f);
+    float prev = 1.0f;
+    for (int k = 0; k <= 50; ++k) {
+      const float u = static_cast<float>(k) / 50.0f;
+      const float o = pop_out_scale(u);
+      CHECK(o <= prev + 1e-5f);  // the outgoing element only ever shrinks
+      prev = o;
+      // The two never both sit at full size, or the swap would read as a blur.
+      CHECK(!(o > 0.5f && pop_in_scale(u) > 0.5f));
+    }
+  }
+
+  CASE("a swap reports settled until it is primed and triggered");
+  {
+    SwapState sw;
+    CHECK(sw.u(0.0) == 1.0f);       // nothing has ever changed
+    CHECK(!sw.running(0.0));
+    sw.primed = true;
+    sw.trigger(10.0);
+    CHECK(sw.running(10.0));
+    CHECK(sw.u(10.0) == 0.0f);
+    CHECK(sw.u(10.0 + kPopSeconds * 0.5) > 0.4f);
+    CHECK(sw.u(10.0 + kPopSeconds) == 1.0f);
+    CHECK(!sw.running(10.0 + kPopSeconds));
+  }
+
+  CASE("a squashed label stays inside the label box");
+  {
+    for (int k = 1; k <= 10; ++k) {
+      Framebuffer fb;
+      mini_draw_text_squashed(fb, kLabelX, kMiniLabelBox, 1, "BUSY", W,
+                              static_cast<float>(k) / 10.0f);
+      for (int y = 0; y < kHeight; ++y)
+        for (int x = 0; x < kLabelX; ++x) CHECK(!fb.get(x, y).lit());
+      for (int x = 0; x < kWidth; ++x) {
+        CHECK(!fb.get(x, 0).lit());
+        CHECK(!fb.get(x, 7).lit());
+      }
+    }
+  }
+}
+
+static void test_status_swap() {
+  CASE("a status change turns over in place and settles on the new status");
+  UiState ui;
+  ui.status = Status::Free;
+  ScreenAnim sa;
+  Anim a;
+  a.dt = 0.01f;
+  a.t = 0.0;
+
+  Framebuffer fb;
+  for (int i = 0; i < 30; ++i) {  // let it prime and settle on FREE
+    a.t = i * 0.01;
+    fb.clear();
+    draw_screen(fb, Screen::Status, ui, a, sa);
+  }
+
+  // Change it, and walk the exchange.
+  ui.status = Status::Busy;
+  bool saw_shrunk = false;
+  for (int i = 30; i < 30 + 40; ++i) {
+    a.t = i * 0.01;
+    fb.clear();
+    draw_screen(fb, Screen::Status, ui, a, sa);
+    // Somewhere in the middle the icon must be smaller than either end state.
+    int rows = 0;
+    for (int y = 0; y < kHeight; ++y) {
+      bool any = false;
+      for (int x = 0; x < kIconW; ++x)
+        if (fb.get(x, y).lit()) any = true;
+      if (any) ++rows;
+    }
+    if (rows > 0 && rows <= 4) saw_shrunk = true;
+  }
+  CHECK(saw_shrunk);
+
+  CASE("and lands on exactly the settled frame");
+  Framebuffer settled, direct;
+  a.t = 100.0;
+  draw_screen(settled, Screen::Status, ui, a, sa);
+  ScreenAnim fresh;
+  Anim b;
+  b.dt = 0.01f;
+  b.t = 100.0;
+  for (int i = 0; i < 3; ++i) {
+    direct.clear();
+    draw_screen(direct, Screen::Status, ui, b, fresh);
+  }
+  int diff = 0;
+  for (int y = 0; y < kHeight; ++y)
+    for (int x = 0; x < kIconW; ++x)
+      if (settled.get(x, y).lit() != direct.get(x, y).lit()) ++diff;
+  CHECK_EQ(diff, 0);
+}
+
 static void test_digit_roll() {
   CASE("a roll stays inside its own five-row band");
   Framebuffer fb;
@@ -1093,6 +1316,8 @@ int main() {
   test_subpixel();
   test_mini_font();
   test_icons();
+  test_sprite();
+  test_status_swap();
   test_digit_roll();
   test_transitions();
   test_dither();

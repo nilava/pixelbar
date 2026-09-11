@@ -386,6 +386,11 @@ void render_all_clips(const std::string& dir) {
       {"trans-slide", Screen::Status, Status::Busy, 2.0f, Screen::Clock, 0.6f},
       {"trans-wipe", Screen::Timer, Status::Busy, 2.0f, Screen::Brightness, 0.6f},
       {"trans-fade", Screen::Status, Status::Busy, 2.5f, Screen::Sleep, 0.7f},
+      // A status change with no screen transition at all: the icon and the word
+      // turn over where they stand. This is the one to watch to judge whether
+      // the motion reads as an object changing or as pixels being swapped.
+      {"swap-status", Screen::Status, Status::Free, 2.4f, Screen::Status, 0.7f,
+       TransitionKind::None, Status::Busy},
       // FREE turning into BUSY: the ring solidifying into a disc is the whole
       // reason the two icons share a silhouette.
       {"trans-dissolve", Screen::Status, Status::Free, 2.2f, Screen::Status, 0.6f,

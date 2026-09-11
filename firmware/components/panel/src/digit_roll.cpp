@@ -6,6 +6,7 @@
 #include "panel/font.h"
 #include "panel/framebuffer.h"
 #include "panel/geometry.h"
+#include "panel/sprite.h"
 
 namespace panel {
 namespace {
@@ -13,32 +14,31 @@ namespace {
 constexpr int kTinyAdvance = kTinyW + 1;
 constexpr int kColonWidth = 2;
 
-// Draws one 3x5 digit offset vertically by dy, emitting only the rows that
-// still fall inside the band [0, kTinyH). This is the clipping.
-void draw_digit_offset(Framebuffer& fb, int x, int y, char c, float dy, RGB color,
-                       float alpha) {
+// The digits sit on the rim of a cylinder whose axis runs across the panel.
+// Radius is half the glyph height, so consecutive faces meet edge to edge.
+constexpr float kWheelRadius = kTinyH * 0.5f;
+
+Sprite digit_sprite(char c) {
   const uint8_t* d = tiny_digit(c);
-  if (!d || alpha <= 0.0f) return;
-  for (int row = 0; row < kTinyH; ++row) {
-    const float ry = row + dy;  // destination row, in band-local coordinates
-    if (ry <= -1.0f || ry >= kTinyH) continue;
-    // Split the row between the two it straddles, and drop any tap that falls
-    // outside the band. Doing the vertical split here rather than with set_aa2
-    // is what guarantees a roll never touches a neighbouring row: set_aa2
-    // would happily write to band-local row -1.
-    const float base = std::floor(ry);
-    const int r0 = static_cast<int>(base);
-    const float f = ry - base;
-    const int rows[2] = {r0, r0 + 1};
-    const float w[2] = {1.0f - f, f};
-    for (int col = 0; col < kTinyW; ++col) {
-      if (!(d[row] & (1 << (kTinyW - 1 - col)))) continue;
-      for (int k = 0; k < 2; ++k) {
-        if (rows[k] < 0 || rows[k] >= kTinyH || w[k] <= 0.0f) continue;
-        fb.add_scaled(x + col, y + rows[k], color, alpha * w[k]);
-      }
-    }
-  }
+  if (!d) return Sprite{};
+  return Sprite{d, kTinyW, kTinyH, kTinyW - 1};
+}
+
+// One face on the rim, at rim angle `turns` from the front. A face presents
+// cos of its area and sits sin of the radius away from the axis, which is the
+// whole of the projection: no other term is needed to make it look solid.
+void draw_wheel_face(Framebuffer& fb, char c, float cx, float axis_y, float turns,
+                     int8_t dir, RGB color, int band_y0, int band_y1) {
+  const Sprite s = digit_sprite(c);
+  if (!s.rows) return;
+  const float sy = fast_cos(turns);
+  if (sy <= 0.01f) return;  // edge-on or facing away
+  const float cy = axis_y + kWheelRadius * fast_sin(turns) * static_cast<float>(dir);
+  // Lambert with a floor. The floor exists because eight rows cannot afford a
+  // face that dims in true proportion to its projected area.
+  const float bright = 0.55f + 0.45f * sy;
+  draw_sprite_scaled(fb, s, cx, cy, 1.0f, sy, color, bright, band_y0, band_y1,
+                     Ink::Normalised, Blend::Add);
 }
 
 }  // namespace
@@ -56,17 +56,59 @@ bool DigitRoll::running(double now_s) const {
   return active && (now_s - t0) < kRollSeconds;
 }
 
+float DigitRoll::progress(double now_s) const {
+  if (!active) return 0.0f;
+  const double d = now_s - t0;
+  if (d <= 0.0) return 0.0f;
+  if (d >= kRollSeconds) return 1.0f;
+  return static_cast<float>(d / kRollSeconds);
+}
+
 void draw_rolling_digit(Framebuffer& fb, int x, int y, const DigitRoll& r, double now_s,
                         RGB color) {
+  const float cx = static_cast<float>(x) + kTinyW * 0.5f;
+  const float axis_y = static_cast<float>(y) + kTinyH * 0.5f;
+  const int band0 = y, band1 = y + kTinyH;
+
   if (!r.running(now_s)) {
-    draw_digit_offset(fb, x, y, r.to, 0.0f, color, 1.0f);
+    draw_wheel_face(fb, r.to, cx, axis_y, 0.0f, r.dir, color, band0, band1);
     return;
   }
-  const float u = ease::out_quint(static_cast<float>((now_s - r.t0) / kRollSeconds));
-  const float span = static_cast<float>(kTinyH);
-  // The outgoing digit slides away, the incoming one arrives from the far side.
-  draw_digit_offset(fb, x, y, r.from, u * span * r.dir, color, 1.0f - u * 0.2f);
-  draw_digit_offset(fb, x, y, r.to, (u - 1.0f) * span * r.dir, color, 1.0f);
+
+  // A quarter turn brings the next face to the front. out_cubic, not out_quint:
+  // a quintic puts the whole turn in the first third of the time and the wheel
+  // spends the rest of it already settled, so the foreshortening that sells the
+  // rotation is over before the eye catches it.
+  const float u = ease::out_cubic(r.progress(now_s));
+  const float theta = u * 0.25f;
+
+  // Both faces are on screen for the whole turn — the outgoing one foreshortens
+  // and rides away from the axis while the incoming one rises into it. Drawing
+  // them together is what produces the doubled, squeezed look mid-turn, and it
+  // is the thing that distinguishes a wheel from a crossfade.
+  draw_wheel_face(fb, r.from, cx, axis_y, theta, r.dir, color, band0, band1);
+  draw_wheel_face(fb, r.to, cx, axis_y, theta - 0.25f, r.dir, color, band0, band1);
+
+  // The rim, as the join between the two faces sweeps past. Without it the
+  // middle of the turn is a gap and the movement loses its centre.
+  //
+  // The highlight is pushed toward white rather than drawn in the face colour.
+  // A specular is the colour of the light, not of the surface, and adding the
+  // accent to itself only drives two channels into clipping: orange on orange
+  // reads as yellow, which looks like a colour change rather than a glint.
+  const float d = std::fabs(theta - 0.125f);
+  if (d < 0.085f) {
+    const float k = 1.0f - d / 0.085f;
+    const uint8_t k8 = static_cast<uint8_t>(k * k * 200.0f + 0.5f);
+    const RGB spec = lerp_rgb(color, RGB(255, 255, 255), 0.6f);
+    const float ry = axis_y + kWheelRadius * fast_sin(theta - 0.125f) *
+                                  static_cast<float>(r.dir);
+    const int row = static_cast<int>(std::floor(ry));
+    if (row >= band0 && row < band1) {
+      fb.span_h(cx - kTinyW * 0.5f, cx + kTinyW * 0.5f, row, spec.scaled(k8),
+                Blend::Add);
+    }
+  }
 }
 
 void draw_pair_face_anim(Framebuffer& fb, PairFaceAnim& anim, int left, int right,

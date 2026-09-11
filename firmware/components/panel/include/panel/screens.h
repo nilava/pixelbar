@@ -9,6 +9,7 @@
 #include "panel/color.h"
 #include "panel/digit_roll.h"
 #include "panel/framebuffer.h"
+#include "panel/sprite.h"
 
 namespace panel {
 
@@ -68,6 +69,13 @@ struct ScreenAnim {
   Smoothed rays{0.0f, 0.12f};
   SmoothedRGB tint;
   bool primed = false;
+
+  // The status the screen is currently showing, and the one it is turning over
+  // from. These are the screen's own memory of the change: UiState only ever
+  // holds the truth as of now, so without them a swap has nothing to swap from.
+  SwapState swap;
+  Status shown = Status::Free;
+  Status was = Status::Free;
 };
 
 // The animated draw. Everything on every screen is in continuous motion.

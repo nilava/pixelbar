@@ -9,5 +9,6 @@ idf_component_register(
          "src/patterns.cpp"
          "src/renderer.cpp"
          "src/screens.cpp"
+         "src/sprite.cpp"
          "src/transition.cpp"
     INCLUDE_DIRS "include")
