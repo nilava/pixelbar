@@ -641,6 +641,38 @@ static void test_screens() {
     CHECK(lit_count(mfb) > 4);
   }
 
+  CASE("the boot sequence runs, stays on the panel and fits the budget");
+  {
+    // It is the brightest thing the panel does that is not a flourish, and it
+    // is the first thing anyone sees, so it is worth knowing it cannot brown
+    // out the supply it is booting from.
+    UiState bu;
+    ScreenAnim ba;
+    Anim ban;
+    ban.dt = 0.01f;
+    Framebuffer bfb;
+    float peak = 0.0f;
+    int frames_lit = 0;
+    for (int f = 0; f < 220; ++f) {
+      bu.boot_t = f * 0.01f;
+      ban.t = f * 0.01;
+      bfb.clear();
+      draw_screen(bfb, Screen::Booting, bu, ban, ba);
+      const float ma = bfb.estimate_ma(255);
+      if (ma > peak) peak = ma;
+      if (lit_count(bfb) > 0) ++frames_lit;
+    }
+    CHECK(peak < kBenchMilliamps);   // the smaller of the two supplies
+    CHECK(frames_lit > 150);         // it is doing something nearly throughout
+
+    // And it finishes: the last frame of the sequence is dark, so the handover
+    // to the home screen is not a cut from a lit panel.
+    bu.boot_t = kBootSeconds;
+    bfb.clear();
+    draw_screen(bfb, Screen::Booting, bu, ban, ba);
+    CHECK_EQ(lit_count(bfb), 0);
+  }
+
   CASE("no status trips the power cap, whichever layout it uses");
   {
     // A full-width badge lights three times the LEDs an icon layout does. If a

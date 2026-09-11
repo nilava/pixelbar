@@ -86,6 +86,7 @@ panel is.
 
 | | |
 | --- | --- |
+| ![boot](docs/anim/booting.gif) | ![disk](docs/anim/trans-disk.gif) |
 | ![free](docs/anim/status-free.gif) | ![call](docs/anim/status-call.gif) |
 | ![focus](docs/anim/status-focus.gif) | ![lunch](docs/anim/status-lunch.gif) |
 | ![menu](docs/anim/menu.gif) | ![status picker](docs/anim/statuspick.gif) |

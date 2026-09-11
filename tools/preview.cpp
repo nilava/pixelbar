@@ -360,6 +360,8 @@ void render_clip(const Clip& c, const std::string& dir) {
       }
     }
 
+    ui.boot_t = secs;  // the boot sequence runs on its own clock, once
+
     // A live second hand and a counting timer, so the clips show real motion.
     ui.second = static_cast<int>(secs) % 60;
     ui.timer_left_s = 25 * 60 - static_cast<int>(secs * 30.0f);
@@ -427,7 +429,7 @@ void render_all_clips(const std::string& dir) {
       {"timer", Screen::Timer, Status::Busy, 4.0f},
       {"colorpick", Screen::ColorPick, Status::Free, 4.0f},
       {"sleep", Screen::Sleep, Status::Free, 4.0f},
-      {"booting", Screen::Booting, Status::Free, 3.0f},
+      {"booting", Screen::Booting, Status::Free, 2.2f},
       {"trans-disk", Screen::Status, Status::Busy, 2.2f, Screen::Clock, 0.6f},
       // The timer finishing: a flash, a field, the word held, then a fade that
       // uncovers the screen rather than painting over it.

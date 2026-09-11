@@ -29,10 +29,9 @@ constexpr int kHomeViewCount = 3;
 // How deep navigation can go. Home, then a group, then a setting, plus slack.
 constexpr int kNavDepth = 4;
 
-// How long the boot screen holds before the panel settles on its home view.
-// Short, because it is showing you that the device woke up, not asking you to
-// read anything.
-constexpr float kBootSeconds = 1.5f;
+// The boot screen runs for as long as its sequence takes. panel::kBootSeconds
+// owns that number, because the animation is what decides when it has finished
+// saying what it had to say.
 
 // The transition that takes you back out of wherever a kind took you in.
 panel::TransitionKind inverse_of(panel::TransitionKind k);

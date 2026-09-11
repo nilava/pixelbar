@@ -131,7 +131,8 @@ void App::update(float dt_s, double now_s) {
   // early, because at that point it has nothing left to tell you.
   if (booting_) {
     boot_s_ += dt_s;
-    if (boot_s_ >= kBootSeconds || (ui_.wifi_connected && boot_s_ >= 0.4f)) {
+    ui_.boot_t = boot_s_;
+    if (boot_s_ >= panel::kBootSeconds) {
       booting_ = false;
       nav_[0] = NavFrame{kHomeViews[view_], TransitionKind::None};
       mgr_.go_to(kHomeViews[view_], ui_, TransitionKind::Fade,
@@ -385,7 +386,7 @@ void App::handle(const Event& e, double now_s) {
     // Touching it during the splash ends the splash and nothing else: you
     // should not be able to change your status by accident while it wakes up.
     booting_ = false;
-    boot_s_ = kBootSeconds;
+    boot_s_ = panel::kBootSeconds;
     nav_[0] = NavFrame{kHomeViews[view_], TransitionKind::None};
     mgr_.go_to(kHomeViews[view_], ui_, TransitionKind::Fade,
                panel::transition_seconds(TransitionKind::Fade));

@@ -689,7 +689,9 @@ class AppRig {
  public:
   AppRig() {
     app.begin(ports, 0.0);
-    run(2.0f);  // past the boot screen
+    // Past the boot sequence *and* the fade that hands over from it, so a test
+    // that starts by turning the knob is not competing with it.
+    run(panel::kBootSeconds + 0.8f);
   }
   void run(float seconds) {
     const int frames = static_cast<int>(seconds / kTick + 0.5f);
@@ -787,7 +789,8 @@ void test_app_boot_and_views() {
     a.begin(p, 0.0);
     CHECK_EQ(static_cast<int>(a.screen()), static_cast<int>(panel::Screen::Booting));
     double t = 0.0;
-    for (int i = 0; i < 300; ++i) { a.update(kTick, t); t += kTick; }
+    const int frames = static_cast<int>((panel::kBootSeconds + 0.8f) / kTick);
+    for (int i = 0; i < frames; ++i) { a.update(kTick, t); t += kTick; }
     CHECK_EQ(static_cast<int>(a.screen()), static_cast<int>(panel::Screen::Status));
   }
 
@@ -1134,7 +1137,8 @@ void test_app_sleep_and_settings() {
     App a;
     a.begin(r.ports, 0.0);
     double t = 0.0;
-    for (int i = 0; i < 300; ++i) { a.update(kTick, t); t += kTick; }
+    const int boot = static_cast<int>((panel::kBootSeconds + 0.8f) / kTick);
+    for (int i = 0; i < boot; ++i) { a.update(kTick, t); t += kTick; }
 
     r.ports.raw.touch[0] = true;
     for (int i = 0; i < 12; ++i) { a.update(kTick, t); t += kTick; }

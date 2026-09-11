@@ -548,15 +548,65 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
     }
 
     case Screen::Booting: {
-      const RGB c = ui.wifi_connected ? RGB(0, 190, 80) : RGB(60, 120, 220);
-      if (ui.wifi_connected) {
-        draw_stroke_icon(fb, kIconX, 0, kStrokeCheck,
-                         clamp01(static_cast<float>(a.t) * 2.0f), c, RGB(255, 255, 255));
-        mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, "OK", c);
-      } else {
-        draw_anim_icon(fb, kIconX, 0, kAnimWifi, a.t, c);
-        mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, "WIFI", c);
-        sheen(fb, a, 7, kLabelX, kWidth - 1, c, 1.5f);
+      // The disk spinning up.
+      //
+      // The panel is read as a radial strip of a record everywhere else, so
+      // this is the same geometry put to work: a point at radius r and angle
+      // theta lands at row 3.5 + r*sin(theta), which means a spoke crosses the
+      // rim in a blink and the hub slowly. Looking at a turning record through
+      // a narrow radial slit is exactly what that looks like, and it is the one
+      // thing this panel's shape is good at.
+      //
+      // Three beats: a spark at the hub, the disk catching and winding up, then
+      // it settles and hands over.
+      const float t = ui.boot_t;
+
+      if (t < kBootSparkS) {
+        // Ignition. A point at the hub, brightening, with the first suggestion
+        // of a streak leaving it.
+        const float u = t / kBootSparkS;
+        const float e = ease::out_cubic(u);
+        const RGB c = lerp_rgb(ui.accent, RGB(255, 255, 255), 1.0f - e);
+        fb.set_aa2(0.5f + e * 1.5f, 3.5f, c, 0.35f + 0.65f * e, Blend::Add);
+        // A short tail, growing along the radius.
+        const float reach = e * 5.0f;
+        for (float d = 0.5f; d < reach; d += 1.0f) {
+          const float k = 1.0f - d / 6.0f;
+          fb.set_aa2(0.5f + d, 3.5f, c, k * k * 0.5f, Blend::Add);
+        }
+        break;
+      }
+
+      // Winding up, then settling. The spin accelerates into the middle of the
+      // sequence and eases out of it, so it reads as something with mass being
+      // brought up to speed rather than a loop that was switched on.
+      const float u = clamp01((t - kBootSparkS) / (kBootSeconds - kBootSparkS));
+      const float spin = kBootRevolutions * ease::in_out_cubic(u);
+      // It fades in as it catches and out as it settles, so neither end is a cut.
+      float level = 1.0f;
+      if (u < 0.12f) level = u / 0.12f;
+      if (u > 0.78f) level = 1.0f - (u - 0.78f) / 0.22f;
+      if (level <= 0.0f) break;
+
+      // Each spoke is drawn at several recent angles, so it smears into a
+      // streak instead of strobing through a sequence of positions. At 24
+      // columns a fast-moving single-pixel line reads as flicker; the trail is
+      // what turns it into motion.
+      for (int i = 0; i < kBootSpokes; ++i) {
+        for (int tr = 0; tr < kBootTrail; ++tr) {
+          const float lag = static_cast<float>(tr) * kBootTrailStep;
+          const float theta = spin - lag + static_cast<float>(i) / kBootSpokes;
+          const float sn = fast_sin(theta);
+          const float fade = 1.0f - static_cast<float>(tr) / kBootTrail;
+          const float bright = level * fade * fade;
+          if (bright <= 0.01f) continue;
+          for (int x = 0; x < kWidth; ++x) {
+            const float r = kDiskHubRadius + static_cast<float>(x);
+            const float y = 3.5f + r * sn;
+            if (y < -1.0f || y > kHeight) continue;
+            fb.set_aa2(static_cast<float>(x), y, ui.accent, bright, Blend::Add);
+          }
+        }
       }
       break;
     }

@@ -84,12 +84,29 @@ struct UiState {
   // the panel is showing: you scroll past several before pressing one.
   Status pick = Status::Free;
 
+  // Seconds since power-on, for the boot sequence. Its own clock rather than
+  // the animation clock, because it has to run once and finish.
+  float boot_t = 0.0f;
+
   // Wall clock and link state, filled in by the caller.
   int hour = 0;
   int minute = 0;
   int second = 0;
   bool wifi_connected = false;
 };
+
+// The boot sequence: a spark at the hub, the disk winding up, then it settles.
+// Its shape is the same radial geometry the view cycle turns on — see the
+// Booting arm in screens.cpp.
+constexpr float kBootSparkS = 0.34f;
+constexpr float kBootSeconds = 1.9f;
+constexpr int kBootSpokes = 3;
+// Enough turns to read as spinning up rather than as one sweep.
+constexpr float kBootRevolutions = 3.2f;
+// A spoke is drawn at this many recent angles so it smears into a streak. At 24
+// columns a fast single-pixel line reads as flicker rather than as movement.
+constexpr int kBootTrail = 7;
+constexpr float kBootTrailStep = 0.006f;
 
 // The icon occupies columns 0..7, column 8 is a gutter that is never written,
 // and the label box is columns 9..23.
