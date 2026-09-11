@@ -67,6 +67,7 @@ class App {
   int depth() const { return depth_; }
   bool asleep() const { return asleep_; }
   bool busy() const { return mgr_.busy(); }
+  float transition_progress() const { return mgr_.progress(); }
   panel::FlourishKind flourish() const { return fl_.kind(); }
 
   // The last event the model acted on, for the simulator's status line.
@@ -82,7 +83,7 @@ class App {
   void enter_menu_entry();
   void pop();
   void go_home();
-  void goto_view(int index);
+  void goto_view(int index, int dir);
   void set_status(panel::Status s);
   void wake();
   void sleep();

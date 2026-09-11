@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "harness.h"
+#include "panel/config.h"
 #include "ui/app.h"
 #include "ui/gesture.h"
 
@@ -980,7 +981,10 @@ void test_app_adjust() {
     for (int i = 0; i < 40; ++i) r.turn(5);
     CHECK_EQ(r.app.state().brightness, 255);
     for (int i = 0; i < 80; ++i) r.turn(-5);
-    CHECK(r.app.state().brightness >= 4);  // never dark enough to look broken
+    // The floor is measured, not chosen for looks: below it a growing share of
+    // the panel sits at a PWM value of one to three, where these LEDs are least
+    // well behaved.
+    CHECK_EQ(r.app.state().brightness, panel::kMinBrightness);
   }
 
   CASE("the colour picker commits its hue to the accent");
@@ -1321,6 +1325,43 @@ void test_app_flourish() {
   }
 }
 
+
+void test_view_transition() {
+  CASE("a turn mid-transition retargets rather than restarting it");
+  {
+    // A detent arrives about every 150 ms and the disk takes 420, so asking for
+    // a new screen on each one restarts the movement before it has played a
+    // third of itself. The shear that makes it read as a disk never appears and
+    // the panel looks like it is jumping between views.
+    AppRig r;
+    r.turn(1);
+    r.run(0.10f);
+    CHECK(r.app.busy());
+    const float p1 = 0.10f / panel::kDiskSeconds;
+
+    r.turn(1);          // a second detent, part way through
+    r.run(0.02f);
+    CHECK(r.app.busy());  // still the same movement, not a new one
+    // Had it restarted, progress would have fallen back toward zero.
+    CHECK(r.app.transition_progress() > p1);
+
+    r.settle();
+    CHECK(!r.app.busy());
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Timer));
+  }
+
+  CASE("and it lands on the view the detents asked for");
+  {
+    AppRig r;
+    r.turn(2);
+    r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Timer));
+    r.turn(-2);
+    r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
+  }
+}
+
 void test_nav_inverse() {
   CASE("every transition that has a direction knows how to come back");
   {
@@ -1356,5 +1397,6 @@ void run_ui_tests() {
   test_app_adjust();
   test_app_flourish();
   test_app_sleep_and_settings();
+  test_view_transition();
   test_nav_inverse();
 }

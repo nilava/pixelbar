@@ -96,6 +96,12 @@ void ScreenManager::restart_with(const UiState& leaving, TransitionKind k,
   to_anim_ = ScreenAnim{};
 }
 
+void ScreenManager::retarget(Screen s) {
+  if (kind_ == TransitionKind::None || s == to_) return;
+  to_ = s;
+  to_anim_ = ScreenAnim{};  // the newly arriving screen starts fresh
+}
+
 void ScreenManager::advance(float dt_s) {
   if (kind_ == TransitionKind::None) return;
   elapsed_ += dt_s;

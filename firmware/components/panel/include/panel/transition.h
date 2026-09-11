@@ -84,6 +84,16 @@ class ScreenManager {
   // that asked whether it was still busy without rendering, got a frozen
   // transition and a busy() that never went false. advance() belongs with the
   // rest of the model's tick; render() is a pure function of where it got to.
+  // Change where a transition is heading without restarting it.
+  //
+  // A detent arrives about every 150 ms when the knob is being turned, and the
+  // disk takes 420 ms, so asking for a new screen on each one restarts the
+  // movement before it has played a third of itself — the shear that gives it
+  // its character never appears and the panel just looks like it is jumping.
+  // Retargeting keeps the same movement running and only changes where it
+  // lands, so a three-click turn is one continuous sweep.
+  void retarget(Screen s);
+
   void advance(float dt_s);
   void render(Framebuffer& out, const UiState& ui, const Anim& a);
 

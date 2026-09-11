@@ -41,7 +41,16 @@ panel::TransitionKind inverse_of(panel::TransitionKind k) {
 }
 
 void Settings::sanitise() {
-  if (brightness < 4) brightness = 4;  // never so dim the panel looks dead
+  // Measured rather than picked. Below this, a large and rapidly growing share
+  // of the panel sits at a PWM value of one to three, where WS2812B parts are
+  // least well behaved: 27% of lit channel-frames at 24, 51% at 12, 64% at 8.
+  // Above it the curve has flattened — 20% at 48 — so this is where lowering
+  // the brightness stops buying dimness and starts buying instability.
+  //
+  // It is a mitigation and not a cure. The minimum non-zero output is 1 at
+  // every brightness, because anti-aliased edges and dithered fades produce
+  // ones by construction.
+  if (brightness < panel::kMinBrightness) brightness = panel::kMinBrightness;
   if (hue < 0.0f || hue > 1.0f) hue = 0.08f;
   if (sleep_after_min > 720) sleep_after_min = 720;
   if (max_ma < panel::kMinMilliamps) max_ma = static_cast<uint16_t>(panel::kMinMilliamps);
@@ -214,14 +223,24 @@ void App::go_home() {
   }
 }
 
-void App::goto_view(int index) {
+void App::goto_view(int index, int dir) {
   const int next = wrap_index(index, kHomeViewCount);
-  const bool forward = wrap_index(next - view_, kHomeViewCount) == 1;
   view_ = next;
-  const TransitionKind k = forward ? TransitionKind::DiskUp : TransitionKind::DiskDown;
   depth_ = 1;
   nav_[0] = NavFrame{kHomeViews[view_], TransitionKind::None};
   if (kHomeViews[view_] == mgr_.current()) return;
+
+  // Mid-turn, keep the movement going and change where it lands rather than
+  // starting it again — otherwise a knob turned at any speed never lets the
+  // disk play far enough to be seen as a disk.
+  if (mgr_.busy()) {
+    mgr_.retarget(kHomeViews[view_]);
+    return;
+  }
+  // The direction is the direction you turned, not the shorter way round the
+  // carousel. Deriving it from the index difference got it backwards as soon as
+  // a single event carried more than one detent.
+  const TransitionKind k = dir > 0 ? TransitionKind::DiskUp : TransitionKind::DiskDown;
   mgr_.go_to(kHomeViews[view_], ui_, k, panel::transition_seconds(k));
 }
 
@@ -290,7 +309,7 @@ void App::adjust(int detents, float rate) {
   switch (screen()) {
     case Screen::Brightness: {
       int v = ui_.brightness + d * 4;
-      if (v < 4) v = 4;
+      if (v < panel::kMinBrightness) v = panel::kMinBrightness;
       if (v > 255) v = 255;
       ui_.brightness = static_cast<uint8_t>(v);
       note_change();
@@ -344,7 +363,7 @@ void App::adjust(int detents, float rate) {
 
     default:
       // At rest the knob moves through the home views, again by raw detents.
-      if (detents != 0) goto_view(view_ + detents);
+      if (detents != 0) goto_view(view_ + detents, detents);
       break;
   }
 }
@@ -391,7 +410,7 @@ void App::handle(const Event& e, double now_s) {
           if (ui_.timer_left_s > 0) ui_.timer_running = !ui_.timer_running;
           break;
         case Zone::Right:
-          goto_view(view_ + 1);
+          goto_view(view_ + 1, +1);
           break;
         default:
           break;
@@ -428,7 +447,7 @@ void App::handle(const Event& e, double now_s) {
       break;
 
     case EventType::Swipe:
-      goto_view(view_ + (e.delta > 0 ? 1 : -1));
+      goto_view(view_ + (e.delta > 0 ? 1 : -1), e.delta > 0 ? 1 : -1);
       break;
 
     // -------------------------------------------------------- encoder

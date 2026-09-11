@@ -55,6 +55,10 @@ constexpr float kMaxAllowedMilliamps = 3000.0f;
 // is just where the panel starts.
 constexpr uint8_t kDefaultBrightness = 48;
 
+// The dimmest the panel is allowed to go. See Settings::sanitise for the
+// measurement behind it.
+constexpr uint8_t kMinBrightness = 24;
+
 // 100 fps, chosen because 1000 % 100 == 0: the 1 ms FreeRTOS tick paces it
 // exactly, with no drift accumulator. The previous value of 60 was silently
 // running at 62.5, because pdMS_TO_TICKS(1000/60) truncates to 16.
