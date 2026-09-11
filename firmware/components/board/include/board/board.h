@@ -48,6 +48,13 @@ class DevicePorts : public ui::Ports {
   // produce. See ui::VirtualPads for why it is levels and not events.
   ui::VirtualPads& pads() { return pads_; }
 
+  // The encoder and its switch, driven from somewhere other than a finger.
+  // Same shape as the pads: a nudge adds detents to the same counter the
+  // interrupt writes, and a press holds the switch level down for a while, so
+  // the recogniser cannot tell the difference and neither can anything above it.
+  void nudge_encoder(int detents);
+  void press_switch(float seconds);
+
   // Diagnostics worth having on the first board: a non-zero illegal count at
   // ordinary turning speed means the interrupt is being starved.
   int32_t encoder_detents() const;
@@ -63,6 +70,8 @@ class DevicePorts : public ui::Ports {
 
  private:
   ui::VirtualPads pads_;
+  int32_t virtual_detents_ = 0;
+  float virtual_press_s_ = 0.0f;
   bool wifi_ = false;
   double uptime_s_ = 0.0;
 };

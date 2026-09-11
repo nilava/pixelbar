@@ -1,0 +1,169 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pixelbar</title>
+<style>
+  :root {
+    --bg: #0d0e12; --panel: #16181f; --line: #262a35;
+    --ink: #e8eaf0; --dim: #8b90a0; --accent: #ff8a1f;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 20px 16px 40px; background: var(--bg); color: var(--ink);
+    font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    max-width: 620px; margin-inline: auto;
+  }
+  h1 { font-size: 17px; margin: 0 0 2px; letter-spacing: .01em; }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; margin-bottom: 14px;
+  }
+  .card h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .09em;
+    color: var(--dim); margin: 0 0 12px; font-weight: 600;
+  }
+  .row { display: flex; gap: 8px; }
+  .row + .row { margin-top: 8px; }
+  button {
+    flex: 1; padding: 14px 8px; font: inherit; font-weight: 600; color: var(--ink);
+    background: #1e212b; border: 1px solid var(--line); border-radius: 9px;
+    cursor: pointer; touch-action: manipulation; user-select: none;
+  }
+  button:active { background: var(--accent); border-color: var(--accent); color: #14151a; }
+  button.held { background: var(--accent); border-color: var(--accent); color: #14151a; }
+  button.wide { flex: 2; }
+  .hint { color: var(--dim); font-size: 12px; margin-top: 10px; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; }
+  dt { color: var(--dim); font-size: 13px; }
+  dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .off { opacity: .45; }
+</style>
+
+<h1>Pixelbar</h1>
+<div class="sub" id="sub">connecting…</div>
+
+<div class="card">
+  <h2>Touch pads</h2>
+  <div class="row">
+    <button data-zone="0">Left</button>
+    <button data-zone="1">Middle</button>
+    <button data-zone="2">Right</button>
+  </div>
+  <div class="row">
+    <button data-hold="0">Hold L</button>
+    <button data-hold="1">Hold M</button>
+    <button data-hold="2">Hold R</button>
+  </div>
+  <div class="row">
+    <button data-swipe="1">Swipe →</button>
+    <button data-swipe="-1">Swipe ←</button>
+  </div>
+  <p class="hint">
+    Buttons drive the pads as levels, not as events, so the gesture recogniser
+    sees exactly what a finger produces. Hold latches — press it again to let go,
+    and hold two at once for a chord.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Knob</h2>
+  <div class="row">
+    <button data-turn="-1">◀ Turn</button>
+    <button data-turn="1">Turn ▶</button>
+  </div>
+  <div class="row">
+    <button data-turn="-5">◀◀ Fast</button>
+    <button data-turn="5">Fast ▶▶</button>
+  </div>
+  <div class="row">
+    <button data-press="1" class="wide">Press</button>
+    <button data-presshold="1" class="wide">Hold — menu</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Status</h2>
+  <div class="row" id="statuses"></div>
+</div>
+
+<div class="card">
+  <h2>Brightness</h2>
+  <input id="bright" type="range" min="24" max="255" step="1" style="width:100%">
+  <p class="hint">Floors at 24: below that a growing share of the panel sits at
+    a PWM value of one to three, where these LEDs are least well behaved.</p>
+</div>
+
+<div class="card">
+  <h2>Panel</h2>
+  <dl>
+    <dt>Screen</dt><dd id="screen">—</dd>
+    <dt>Status</dt><dd id="status">—</dd>
+    <dt>Timer</dt><dd id="timer">—</dd>
+    <dt>Brightness</dt><dd id="b">—</dd>
+    <dt>Frame rate</dt><dd id="fps">—</dd>
+    <dt>Encoder</dt><dd id="enc">—</dd>
+  </dl>
+</div>
+
+<script>
+const STATUSES = ["Free","Busy","Call","DND","Away","Focus","Lunch","Meet"];
+const held = new Set();
+
+function send(body) {
+  fetch("/api/input", {method:"POST", body: JSON.stringify(body)}).catch(()=>{});
+}
+
+document.querySelectorAll("[data-zone]").forEach(b =>
+  b.onclick = () => send({tap: +b.dataset.zone}));
+
+document.querySelectorAll("[data-hold]").forEach(b => b.onclick = () => {
+  const z = +b.dataset.hold;
+  if (held.has(z)) { held.delete(z); b.classList.remove("held"); send({release: z}); }
+  else { held.add(z); b.classList.add("held"); send({hold: z}); }
+});
+
+document.querySelectorAll("[data-swipe]").forEach(b =>
+  b.onclick = () => send({swipe: +b.dataset.swipe}));
+document.querySelectorAll("[data-turn]").forEach(b =>
+  b.onclick = () => send({turn: +b.dataset.turn}));
+document.querySelectorAll("[data-press]").forEach(b =>
+  b.onclick = () => send({press: 1}));
+document.querySelectorAll("[data-presshold]").forEach(b =>
+  b.onclick = () => send({presshold: 1}));
+
+const row = document.getElementById("statuses");
+STATUSES.forEach((name, i) => {
+  const b = document.createElement("button");
+  b.textContent = name;
+  b.onclick = () => send({status: i});
+  row.appendChild(b);
+});
+
+const bright = document.getElementById("bright");
+let dragging = false;
+bright.oninput = () => { dragging = true; send({brightness: +bright.value}); };
+bright.onchange = () => { dragging = false; };
+
+const mmss = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+
+async function poll() {
+  try {
+    const s = await (await fetch("/api/state")).json();
+    document.getElementById("sub").textContent = `connected · ${s.ip}`;
+    document.getElementById("screen").textContent = s.screen;
+    document.getElementById("status").textContent = s.status;
+    document.getElementById("timer").textContent =
+      mmss(s.timer_left) + (s.timer_running ? " · running" : " · stopped");
+    document.getElementById("b").textContent =
+      `${s.brightness} (${Math.round(s.brightness*100/255)}%)`;
+    document.getElementById("fps").textContent = s.fps.toFixed(1);
+    document.getElementById("enc").textContent =
+      `${s.detents} detents, ${s.illegal} illegal`;
+    if (!dragging) bright.value = s.brightness;
+    document.body.classList.remove("off");
+  } catch { document.body.classList.add("off"); }
+}
+poll();
+setInterval(poll, 1000);
+</script>

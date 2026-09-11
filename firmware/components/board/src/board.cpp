@@ -187,7 +187,14 @@ void scan_report(char* out, int cap) {
 void DevicePorts::advance(float dt_s) {
   uptime_s_ += dt_s;
   pads_.advance(dt_s);
+  if (virtual_press_s_ > 0.0f) {
+    virtual_press_s_ -= dt_s;
+    if (virtual_press_s_ < 0.0f) virtual_press_s_ = 0.0f;
+  }
 }
+
+void DevicePorts::nudge_encoder(int detents) { virtual_detents_ += detents; }
+void DevicePorts::press_switch(float seconds) { virtual_press_s_ = seconds; }
 
 void DevicePorts::read_raw(ui::RawInput* out) {
   if (pins::kTouchFitted) {
@@ -200,8 +207,10 @@ void DevicePorts::read_raw(ui::RawInput* out) {
 
   // Active low: the switch shorts to ground through the internal pull-up.
   out->encoder_sw =
-      pins::kEncoderSwitchFitted && gpio_get_level(pins::kEncoderSw) == 0;
-  out->encoder_detents = pins::kEncoderFitted ? g_detents : 0;
+      (pins::kEncoderSwitchFitted && gpio_get_level(pins::kEncoderSw) == 0) ||
+      virtual_press_s_ > 0.0f;
+  out->encoder_detents =
+      (pins::kEncoderFitted ? g_detents : 0) + virtual_detents_;
 
   // The MPU-6050 is not fitted, and saying so is better than reporting a
   // plausible stationary reading: motion_valid false makes the whole motion

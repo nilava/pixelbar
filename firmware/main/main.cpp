@@ -14,6 +14,7 @@
 #include "panel/config.h"
 #include "panel/framebuffer.h"
 #include "board/board.h"
+#include "net/net.h"
 #include "panel/patterns.h"
 #include "panel/renderer.h"
 #include "panel/screens.h"
@@ -80,6 +81,11 @@ extern "C" void app_main(void) {
   app.begin(ports, 0.0);
   ESP_LOGI(TAG, "ready: turn the knob to change view, hold it for the menu");
 
+  // WiFi and the web page. Started, not waited for: a device whose panel does
+  // not light until a router answers is a worse device.
+  const esp_err_t nerr = net_start();
+  if (nerr != ESP_OK) ESP_LOGW(TAG, "network not available: %s", esp_err_to_name(nerr));
+
   // Which pins actually move when you turn the knob. Resting levels cannot
   // tell a floating pin from a correctly pulled-up one; edges can.
   constexpr bool kPinScan = false;
@@ -109,6 +115,33 @@ extern "C" void app_main(void) {
       engine.render_us(fb, t_us);
     } else {
       if (kPinScan) board::scan_poll();
+
+      // Drain whatever the web page asked for, once, at the top of the frame.
+      //
+      // Handlers run on the server's task and never touch the model: they put a
+      // command on a queue and this is the only place it is read. Reaching into
+      // the App from a handler would mutate state halfway through a frame that
+      // is already being drawn from it, and the failure would be a rare torn
+      // frame rather than anything a test would catch.
+      net_cmd_t cmd;
+      while (net_take_cmd(&cmd)) {
+        switch (cmd.kind) {
+          // Pads and knob arrive as levels and detents, so the recogniser sees
+          // exactly what the hardware would produce.
+          case NET_CMD_TAP: ports.pads().tap(cmd.a); break;
+          case NET_CMD_HOLD: ports.pads().set_held(cmd.a, true); break;
+          case NET_CMD_RELEASE: ports.pads().set_held(cmd.a, false); break;
+          case NET_CMD_SWIPE: ports.pads().swipe(cmd.a); break;
+          case NET_CMD_TURN: ports.nudge_encoder(cmd.a); break;
+          case NET_CMD_PRESS: ports.press_switch(0.06f); break;
+          case NET_CMD_PRESS_HOLD: ports.press_switch(0.60f); break;
+          // These two are values rather than gestures, so they go straight in.
+          case NET_CMD_STATUS: app.set_status_external(cmd.a); break;
+          case NET_CMD_BRIGHTNESS: app.set_brightness_external(cmd.a); break;
+          default: break;
+        }
+      }
+
       ports.advance(a.dt);
       app.update(a.dt, a.t);
       app.render(fb, a);
@@ -172,6 +205,22 @@ extern "C" void app_main(void) {
         ESP_LOGI(TAG, "pins gpio:level/edges  %s", scan);
       }
       meter.reset_peak();
+    }
+
+    // What the web page shows. Written once a frame and read by the server's
+    // task; a torn read would at worst mix two frames of a status display.
+    {
+      net_status_t ns = {};
+      snprintf(ns.screen, sizeof(ns.screen), "%s", panel::screen_name(app.screen()));
+      snprintf(ns.status, sizeof(ns.status), "%s",
+               panel::status_label(app.state().status));
+      ns.brightness = app.state().brightness;
+      ns.timer_left_s = app.state().timer_left_s;
+      ns.timer_running = app.state().timer_running;
+      ns.fps = meter.fps();
+      ns.detents = ports.encoder_detents();
+      ns.illegal = ports.encoder_illegal();
+      net_publish(&ns);
     }
 
     vTaskDelayUntil(&last_wake, period);

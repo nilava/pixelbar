@@ -278,6 +278,20 @@ void App::set_status(Status s) {
   ui_.status = s;
 }
 
+void App::set_status_external(int status) {
+  if (status < 0 || status >= static_cast<int>(Status::Count)) return;
+  if (asleep_) wake();
+  idle_s_ = 0.0f;
+  set_status(static_cast<Status>(status));
+}
+
+void App::set_brightness_external(int v) {
+  if (v < panel::kMinBrightness) v = panel::kMinBrightness;
+  if (v > 255) v = 255;
+  ui_.brightness = static_cast<uint8_t>(v);
+  note_change();
+}
+
 void App::wake() {
   if (!asleep_) return;
   asleep_ = false;

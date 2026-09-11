@@ -55,6 +55,12 @@ class App {
   // recogniser produced; tests and the simulator can also call it.
   void handle(const Event& e, double now_s);
 
+  // Set directly rather than by gesture, for the web page. A status arriving
+  // from elsewhere is still an event on the panel, so it plays the same claim
+  // animation a finger would have caused.
+  void set_status_external(int status);
+  void set_brightness_external(int v);
+
   void render(panel::Framebuffer& fb, const panel::Anim& a);
 
   const panel::UiState& state() const { return ui_; }
