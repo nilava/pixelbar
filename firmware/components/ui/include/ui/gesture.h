@@ -57,6 +57,14 @@ class Quadrature {
     state_ = now;
     if (step == 2) {
       ++illegal_;  // both lines moved between samples: the direction is unknown
+      // And throw away the quarter-steps gathered so far. They were counted on
+      // the assumption of an unbroken sequence, and an illegal transition says
+      // that assumption is gone — keeping them lets a burst of noise walk the
+      // accumulator across the detent threshold and invent a click nobody
+      // made. Measured on a bench board with the encoder module's pull-ups
+      // unpowered: 32 illegal transitions and a phantom detent inside twelve
+      // seconds of sitting still.
+      sub_ = 0;
       return 0;
     }
     sub_ = static_cast<int8_t>(sub_ + step);
@@ -152,6 +160,12 @@ class Recogniser {
   bool sw_down_ = false;        // debounced
   bool sw_raw_ = false;         // last raw level
   float sw_stable_s_ = 0.0f; // how long raw has held its value
+  // How long the contact was actually closed, measured raw edge to raw
+  // edge. Not the same as the time since the debounce latched, which is
+  // shorter by a debounce window at each end and so cannot be compared
+  // against a duration a finger would produce.
+  float sw_contact_s_ = 0.0f;
+  float sw_last_contact_s_ = 0.0f;
   float sw_down_s_ = 0.0f;
   float sw_since_release_s_ = 0.0f;
   bool sw_hold_fired_ = false;

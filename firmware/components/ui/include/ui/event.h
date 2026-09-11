@@ -112,6 +112,28 @@ struct GestureConfig {
   // turning before you press.
   float switch_settle_after_turn_s = 0.09f;
 
+  // The shortest contact that counts as a press.
+  //
+  // The guard above only helps once a detent has been decoded, and a detent is
+  // four quadrature edges — at a brisk turn that is some tens of milliseconds
+  // after the knob actually started moving. The rotary contacts are already
+  // chattering through that window and the shared ground is already dipping
+  // the switch line, but as far as the recogniser is concerned the knob has
+  // been still for seconds. So the dip latches as a press, and by the time the
+  // turn is visible the press has already been and gone.
+  //
+  // No amount of looking backwards fixes that, because the turn has not
+  // happened yet. What separates the two is duration: a finger holds the
+  // button down for a tenth of a second at the very least, and a coupled dip
+  // is over in a few milliseconds. Press is emitted on release, so requiring a
+  // minimum dwell costs no latency at all — the time was already spent.
+  //
+  // Thirty milliseconds is deliberately well below the shortest click anyone
+  // produces on purpose — a quick one is fifty, a normal one over eighty — so
+  // this rejects bounce without ever making the button feel unreliable. It
+  // does not need to be tight, only to be somewhere in the gap.
+  float min_press_s = 0.03f;
+
   // Motion thresholds, in g. The tap figure is the least grounded number in
   // the design and must be measured against a desk bump before it is trusted.
   float tap_g = 1.2f;

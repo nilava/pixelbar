@@ -61,23 +61,45 @@ style **breakout board** instead, which adds a small PCB and labels the pins
 | `S1` (or `CLK`) | **GPIO20** | quadrature A |
 | `S2` (or `DT`) | **GPIO21** | quadrature B |
 | `KEY` (or `SW`) | **GPIO0** | the push switch |
-| `+` (or `5V`) | **nothing** | see below |
+| `+` (or `5V`) | **3V3** | never 5 V — see below |
 
-### Leave the `+` pin unconnected
+### Connect `+` to 3.3 V, and never to 5 V
 
-That pin exists only to feed two 10 kΩ pull-up resistors on the module, from
-`+` to `S1` and `S2`. The firmware enables the ESP32-C3's *internal* pull-ups
-on those pins instead, so the encoder works with four wires and the fifth is
-redundant.
+**The ESP32-C3's GPIOs are 3.3 V and are not 5 V tolerant.** The module's `+`
+pin feeds 10 kΩ pull-up resistors that sit on `S1`, `S2` and `KEY`, so wiring
+it to 5 V drives 5 V straight into three GPIOs through those resistors. Use
+the board's 3V3 pin.
 
-It is not merely redundant, though. **The ESP32-C3's GPIOs are 3.3 V and are
-not 5 V tolerant.** Wiring that pin to 5 V would pull S1, S2 and KEY up to 5 V
-through those resistors and drive 5 V straight into three GPIOs. If you want
-the module's own pull-ups for any reason, connect `+` to **3.3 V** — never 5 V.
+An earlier version of this file said to leave `+` unconnected, on the
+reasoning that the ESP32-C3's internal pull-ups make the module's own
+redundant. That was wrong, and wrong in a way that took a while to see.
 
-This is why the wiring has no encoder supply: the bare EC11 the enclosure is
-modelled around has no power pin at all, and the module's is one you should not
-use here.
+With `+` floating, those three resistors do not disappear — they tie `S1`,
+`S2` and `KEY` together through an undriven node. The internal pull-ups are
+about 45 kΩ against the module's 10 kΩ, so the lines end up weakly held and
+coupled to each other rather than cleanly high. Two things follow, and both
+were observed on the bench:
+
+- **Phantom input while nothing is being touched.** Twelve seconds of sitting
+  perfectly still produced 32 illegal quadrature transitions, a detent that
+  nobody turned, and a switch press that started the timer. The panel appeared
+  to navigate and change status by itself.
+- **The switch dipping whenever the knob turns.** Diagnosed at first as the
+  push switch sharing a ground with the rotary contacts. It is really this
+  coupling: working the rotary contacts disturbs the shared floating node, and
+  `KEY` moves with it. The firmware carries two guards against this — it will
+  not read the switch while the knob is moving, and it rejects any contact
+  shorter than a finger can make — but they are mitigations for a wiring
+  fault, not a substitute for fixing it.
+
+Powering `+` from 3V3 puts strong 10 kΩ pull-ups on all three lines and makes
+the coupling node a supply rail instead of an antenna.
+
+The bare EC11 the enclosure is modelled around has no power pin at all: it is
+just the switch and the two contacts, with no resistors to feed, so on the
+final build the internal pull-ups are the whole story and there is nothing to
+connect. The 3V3 wire is needed only while the encoder is still on its
+breakout board.
 
 ### If the direction comes out backwards
 

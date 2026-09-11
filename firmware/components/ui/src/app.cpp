@@ -120,6 +120,7 @@ void App::update(float dt_s, double now_s) {
       ui_.hour = h;
       ui_.minute = m;
       ui_.second = s;
+      ui_.time_valid = true;
     }
     ui_.wifi_connected = ports_->wifi_connected();
   }
@@ -231,18 +232,19 @@ void App::goto_view(int index, int dir) {
   nav_[0] = NavFrame{kHomeViews[view_], TransitionKind::None};
   if (kHomeViews[view_] == mgr_.current()) return;
 
-  // Mid-turn, keep the movement going and change where it lands rather than
-  // starting it again — otherwise a knob turned at any speed never lets the
-  // disk play far enough to be seen as a disk.
-  if (mgr_.busy()) {
-    mgr_.retarget(kHomeViews[view_]);
-    return;
-  }
   // The direction is the direction you turned, not the shorter way round the
   // carousel. Deriving it from the index difference got it backwards as soon as
   // a single event carried more than one detent.
   const TransitionKind k = dir > 0 ? TransitionKind::DiskUp : TransitionKind::DiskDown;
-  mgr_.go_to(kHomeViews[view_], ui_, k, panel::transition_seconds(k));
+  const float secs = panel::transition_seconds(k);
+  // Mid-turn each detent is its own leg, handed off from the screen that was
+  // arriving. See ScreenManager::retarget for why keeping one movement running
+  // across detents looked like no movement at all.
+  if (mgr_.busy()) {
+    mgr_.retarget(kHomeViews[view_], ui_, k, secs);
+    return;
+  }
+  mgr_.go_to(kHomeViews[view_], ui_, k, secs);
 }
 
 void App::enter_menu_entry() {

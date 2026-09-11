@@ -336,6 +336,13 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
     }
 
     case Screen::Clock: {
+      if (!ui.time_valid) {
+        // No time source yet. Dashes in a dimmed accent, and no seconds hand,
+        // because there are no seconds to show — the absence has to look
+        // deliberate rather than like a clock stopped at midnight.
+        mini_draw_text_centered(fb, 0, kWidth, 2, "--:--", ui.accent.scaled(115));
+        break;
+      }
       draw_pair_face_anim(fb, sa.face, ui.hour, ui.minute, true, ui.accent, a.t);
       // The seconds hand walks the perimeter: 24+24+6+6 is exactly 60 cells,
       // one per second, and it never crosses the digits.

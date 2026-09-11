@@ -49,6 +49,8 @@ void Recogniser::reset() {
   sw_down_ = false;
   sw_raw_ = false;
   sw_stable_s_ = 0.0f;
+  sw_contact_s_ = 0.0f;
+  sw_last_contact_s_ = 0.0f;
   sw_down_s_ = 0.0f;
   sw_since_release_s_ = 0.0f;
   sw_hold_fired_ = false;
@@ -232,8 +234,18 @@ int Recogniser::update(const RawInput& in, float dt_s, Event* out, int max) {
   if (in.encoder_sw != sw_raw_) {
     sw_raw_ = in.encoder_sw;
     sw_stable_s_ = 0.0f;
+    if (sw_raw_) {
+      // The contact closed at some point during the frame we are looking
+      // at, not at the end of it, so this frame counts. Starting at zero
+      // undercounts every press by one frame, which at 100 fps is enough
+      // to matter against a threshold of a few tens of milliseconds.
+      sw_contact_s_ = dt_s;
+    } else {
+      sw_last_contact_s_ = sw_contact_s_;  // and this is how long it was closed
+    }
   } else {
     sw_stable_s_ += dt_s;
+    if (sw_raw_) sw_contact_s_ += dt_s;
   }
   if (!turning && sw_stable_s_ >= cfg_.switch_stable_s && sw_down_ != sw_raw_) {
     sw_down_ = sw_raw_;
@@ -247,6 +259,10 @@ int Recogniser::update(const RawInput& in, float dt_s, Event* out, int max) {
         n = emit(out, max, n, Event(EventType::PressHoldEnd));
       } else if (sw_turned_while_down_) {
         // Press-and-turn is a modifier, not a press. Releasing it does nothing.
+      } else if (sw_last_contact_s_ < cfg_.min_press_s) {
+        // Too brief to have been a finger. See GestureConfig::min_press_s: this
+        // is the only thing that catches a ground-coupled dip at the start of a
+        // turn, before any detent has been decoded to gate it.
       } else if (sw_press_pending_) {
         sw_press_pending_ = false;
         n = emit(out, max, n, Event(EventType::DoublePress));

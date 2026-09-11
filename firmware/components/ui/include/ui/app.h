@@ -73,6 +73,9 @@ class App {
   bool asleep() const { return asleep_; }
   bool busy() const { return mgr_.busy(); }
   float transition_progress() const { return mgr_.progress(); }
+  // The screen a transition is leaving. Exposed so a test can tell a real
+  // movement from one that is blending a screen against itself.
+  panel::Screen transition_from() const { return mgr_.previous(); }
   panel::FlourishKind flourish() const { return fl_.kind(); }
 
   // The last event the model acted on, for the simulator's status line.

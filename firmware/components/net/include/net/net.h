@@ -65,6 +65,10 @@ bool net_connected(void);
 // Dotted quad, or an empty string. Valid once connected.
 const char* net_ip(void);
 
+// True once the clock has been set from the network at least once. False means
+// there is no time at all, and the panel must say so rather than draw a zero.
+bool net_time_valid(void);
+
 // Called from the render loop each frame.
 void net_publish(const net_status_t* s);
 // Drains one command, or returns false. Never blocks.

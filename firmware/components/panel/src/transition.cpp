@@ -96,10 +96,15 @@ void ScreenManager::restart_with(const UiState& leaving, TransitionKind k,
   to_anim_ = ScreenAnim{};
 }
 
-void ScreenManager::retarget(Screen s) {
+void ScreenManager::retarget(Screen s, const UiState& leaving, TransitionKind k,
+                             float seconds) {
   if (kind_ == TransitionKind::None || s == to_) return;
-  to_ = s;
-  to_anim_ = ScreenAnim{};  // the newly arriving screen starts fresh
+  // What was arriving is now what is leaving, and it keeps the animation phase
+  // it had reached — so a screen caught halfway into its own entrance leaves
+  // from there rather than snapping back to the start of it.
+  const ScreenAnim arriving = to_anim_;
+  go_to(s, leaving, k, seconds);
+  from_anim_ = arriving;
 }
 
 void ScreenManager::advance(float dt_s) {

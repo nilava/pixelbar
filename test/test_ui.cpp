@@ -122,6 +122,26 @@ void test_quadrature() {
     CHECK_EQ(r.illegal(), 0);
   }
 
+  CASE("an illegal transition throws away the quarter-steps before it");
+  {
+    // Three clean quarters, then both lines change at once — which cannot
+    // happen on a real turn. The position is unknown from there, so the three
+    // quarters must not be allowed to stand: if they do, one more edge of
+    // noise completes a detent that nobody turned. This is the phantom
+    // navigation seen on a board whose encoder pull-ups were unpowered.
+    Quadrature q;
+    q.update(false, false);
+    q.update(true, false);   // one quarter
+    q.update(true, true);    // two
+    q.update(false, true);   // three
+    CHECK_EQ(q.detents(), 0);
+    q.update(true, false);   // both lines move: illegal
+    CHECK_EQ(q.illegal(), 1u);
+    // One more legal quarter must not now complete a detent.
+    CHECK_EQ(q.update(true, true), 0);
+    CHECK_EQ(q.detents(), 0);
+  }
+
   CASE("a partial turn produces no detent, and does not lose its place");
   {
     Quadrature q;
@@ -426,6 +446,38 @@ void test_encoder() {
     r.sw(false);
     r.hold_for(0.03f);
     CHECK_EQ(r.count(EventType::DoublePress), 1);
+    CHECK_EQ(r.count(EventType::Press), 1);
+  }
+
+  CASE("a dip that starts a fast turn is not a press");
+  {
+    // The real failure, reproduced: the switch line dips as the rotary
+    // contacts begin to work, but the first detent needs four quadrature edges
+    // and has not been decoded yet — so the turn guard is not armed and the
+    // dip latches. On the Status screen a press toggles BUSY, so spinning the
+    // knob kept setting the status on the way past.
+    Rig r;
+    r.hold_for(0.5f);           // knob has been still for a long time
+    r.sw(true);                 // ground dips as the contacts start moving
+    r.hold_for(0.015f);         // long enough to clear switch_stable_s
+    r.sw(false);
+    r.hold_for(0.02f);
+    // Only now does the first detent finish decoding.
+    r.turn(1);
+    r.hold_for(0.05f);
+    CHECK_EQ(r.count(EventType::Press), 0);
+    CHECK_EQ(r.count(EventType::Turn), 1);
+  }
+
+  CASE("but a deliberate press still registers");
+  {
+    // The guard is a duration, so it must not eat a real click. 80 ms is a
+    // brisk press by any measure.
+    Rig r;
+    r.sw(true);
+    r.hold_for(0.08f);
+    r.sw(false);
+    r.hold_for(0.04f);  // release debounce has to clear before Press is emitted
     CHECK_EQ(r.count(EventType::Press), 1);
   }
 
@@ -753,7 +805,11 @@ class TestPorts : public Ports {
 // Drives an App the way the firmware and the simulator do.
 class AppRig {
  public:
-  AppRig() {
+  // `with_clock` false starts the rig with no time source at all, which is
+  // what a real device does until SNTP answers. time_valid latches on and
+  // never off, so a test about the unsynced state has to begin there.
+  explicit AppRig(bool with_clock = true) {
+    ports.has_clock = with_clock;
     app.begin(ports, 0.0);
     // Past the boot sequence *and* the fade that hands over from it, so a test
     // that starts by turning the knob is not competing with it.
@@ -790,7 +846,9 @@ class AppRig {
     ports.raw.encoder_detents += detents;
     run(0.05f);
   }
-  void press(float seconds = 0.06f) {
+  // A deliberate click. Measured presses run 80-150 ms; the recogniser
+  // rejects anything under GestureConfig::min_press_s as contact bounce.
+  void press(float seconds = 0.09f) {
     ports.raw.encoder_sw = true;
     run(seconds);
     ports.raw.encoder_sw = false;
@@ -1396,28 +1454,84 @@ void test_app_flourish() {
 }
 
 
-void test_view_transition() {
-  CASE("a turn mid-transition retargets rather than restarting it");
+void test_clock_validity() {
+  CASE("the clock is not valid until a time source says so");
   {
-    // A detent arrives about every 150 ms and the disk takes 420, so asking for
-    // a new screen on each one restarts the movement before it has played a
-    // third of itself. The shear that makes it read as a disk never appears and
-    // the panel looks like it is jumping between views.
+    // Before the first sync there is no time. UiState::time_valid staying
+    // false is what makes the Clock screen draw dashes instead of 00:00.
+    AppRig r(false);
+    r.run(0.05f);
+    CHECK(!r.app.state().time_valid);
+    CHECK_EQ(r.app.state().hour, 0);
+    CHECK_EQ(r.app.state().minute, 0);
+  }
+
+  CASE("and it latches once the port starts answering");
+  {
+    AppRig r(false);
+    r.run(0.05f);
+    CHECK(!r.app.state().time_valid);
+    r.ports.has_clock = true;   // SNTP lands
+    r.run(0.05f);
+    CHECK(r.app.state().time_valid);
+    CHECK_EQ(r.app.state().hour, 14);
+    CHECK_EQ(r.app.state().minute, 25);
+  }
+}
+
+void test_view_transition() {
+  CASE("a turn mid-transition hands off to a new leg, from the screen arriving");
+  {
+    // Each detent is its own short movement. The screen that was arriving
+    // becomes the screen that leaves, so a knob spun hard shows the first part
+    // of each leg in turn rather than blending the view you started on against
+    // a destination that keeps moving. Getting this wrong is what made a fast
+    // turn look like it had no animation at all.
     AppRig r;
+    const panel::Screen first = r.app.screen();
     r.turn(1);
     r.run(0.10f);
     CHECK(r.app.busy());
-    const float p1 = 0.10f / panel::kDiskSeconds;
+    CHECK_EQ(static_cast<int>(r.app.transition_from()), static_cast<int>(first));
+    const panel::Screen second = r.app.screen();
 
     r.turn(1);          // a second detent, part way through
     r.run(0.02f);
-    CHECK(r.app.busy());  // still the same movement, not a new one
-    // Had it restarted, progress would have fallen back toward zero.
-    CHECK(r.app.transition_progress() > p1);
+    CHECK(r.app.busy());
+    // The new leg leaves from the screen that had been arriving, not from the
+    // one we originally started on.
+    CHECK_EQ(static_cast<int>(r.app.transition_from()), static_cast<int>(second));
+    // And it is a fresh leg, so there is runway left for it to be seen.
+    CHECK(r.app.transition_progress() < 0.5f);
 
     r.settle();
     CHECK(!r.app.busy());
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Timer));
+  }
+
+  CASE("turning back mid-transition reverses instead of stalling");
+  {
+    // Forward then straight back used to set the destination to the screen we
+    // were already leaving, so the rest of the transition blended a screen
+    // against itself and the panel visibly stopped dead.
+    AppRig r;
+    const panel::Screen home = r.app.screen();
+    r.turn(1);
+    r.run(0.08f);
+    CHECK(r.app.busy());
+    const panel::Screen forward = r.app.screen();
+    CHECK(forward != home);
+
+    r.turn(-1);
+    r.run(0.02f);
+    CHECK(r.app.busy());
+    // A real movement: two different screens, heading back where we came from.
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(home));
+    CHECK_EQ(static_cast<int>(r.app.transition_from()), static_cast<int>(forward));
+    CHECK(r.app.transition_from() != r.app.screen());
+
+    r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(home));
   }
 
   CASE("and it lands on the view the detents asked for");
@@ -1468,6 +1582,7 @@ void run_ui_tests() {
   test_app_adjust();
   test_app_flourish();
   test_app_sleep_and_settings();
+  test_clock_validity();
   test_view_transition();
   test_nav_inverse();
 }

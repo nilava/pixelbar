@@ -260,12 +260,17 @@ bool DevicePorts::save_settings(const ui::Settings& s) {
 }
 
 bool DevicePorts::wall_clock(int* h, int* m, int* s) {
-  // No time source yet. Returning false is what makes the Clock screen show
-  // `--:--` instead of a plausible lie; it becomes true when SNTP lands.
-  (void)h;
-  (void)m;
-  (void)s;
-  return false;
+  // Returning false is what makes the Clock screen show `--:--` instead of a
+  // plausible lie. Before the first SNTP sync the system clock reads 1970, and
+  // drawing that as 05:30 would be a clock that is confidently wrong.
+  if (!time_valid_) return false;
+  const time_t now = time(NULL);
+  struct tm tm;
+  localtime_r(&now, &tm);
+  *h = tm.tm_hour;
+  *m = tm.tm_min;
+  *s = tm.tm_sec;
+  return true;
 }
 
 bool DevicePorts::wifi_connected() { return wifi_; }

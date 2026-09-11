@@ -67,12 +67,17 @@ class DevicePorts : public ui::Ports {
   uint8_t raw_encoder() const;  // bit 0 A, 1 B, 2 switch
 
   void set_wifi(bool up) { wifi_ = up; }
+  // Pushed in from main rather than read from `net` directly, so this
+  // component keeps knowing nothing about the radio. Until it is true
+  // there is no time and wall_clock() says so.
+  void set_time_valid(bool ok) { time_valid_ = ok; }
 
  private:
   ui::VirtualPads pads_;
   int32_t virtual_detents_ = 0;
   float virtual_press_s_ = 0.0f;
   bool wifi_ = false;
+  bool time_valid_ = false;
   double uptime_s_ = 0.0;
 };
 

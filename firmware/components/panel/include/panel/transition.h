@@ -87,15 +87,31 @@ class ScreenManager {
   // that asked whether it was still busy without rendering, got a frozen
   // transition and a busy() that never went false. advance() belongs with the
   // rest of the model's tick; render() is a pure function of where it got to.
-  // Change where a transition is heading without restarting it.
+  // Hand a transition already in flight a new destination.
   //
-  // A detent arrives about every 150 ms when the knob is being turned, and the
-  // disk takes 420 ms, so asking for a new screen on each one restarts the
-  // movement before it has played a third of itself — the shear that gives it
-  // its character never appears and the panel just looks like it is jumping.
-  // Retargeting keeps the same movement running and only changes where it
-  // lands, so a three-click turn is one continuous sweep.
-  void retarget(Screen s);
+  // The first version of this kept the same movement running and only swapped
+  // where it landed, on the reasoning that a detent arrives faster than the
+  // disk plays and restarting on each one would never let the shear appear.
+  // That reasoning was right and the implementation of it was wrong in two
+  // ways that only showed up on a knob being spun hard.
+  //
+  // It left `from_` alone. So a fast turn blended the *original* screen
+  // against a destination that kept changing, every intermediate view went
+  // unseen, and the clock ran out mid-sweep — which is why the animation
+  // appeared to be skipped entirely rather than shortened. Worse, turning
+  // forward and straight back set the destination to the screen we were
+  // already leaving, so the panel spent the rest of the transition blending a
+  // screen against itself: a visible dead stop.
+  //
+  // The honest model is that each detent is its own short leg. What was
+  // arriving becomes what is leaving, the new screen arrives, and the clock
+  // starts over. Spun fast you see the first third of each leg, which is
+  // exactly what a detented carousel does; turned back you get a real
+  // transition in the other direction instead of a stall. `k` is passed in
+  // because direction belongs to the gesture, not to the transition already
+  // running.
+  void retarget(Screen s, const UiState& leaving, TransitionKind k,
+                float seconds);
 
   void advance(float dt_s);
   void render(Framebuffer& out, const UiState& ui, const Anim& a);

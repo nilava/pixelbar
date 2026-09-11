@@ -143,6 +143,11 @@ extern "C" void app_main(void) {
         }
       }
 
+      // The radio's state reaches the model through the ports, never directly:
+      // `board` knows nothing about WiFi and `ui` knows nothing about either.
+      ports.set_wifi(net_connected());
+      ports.set_time_valid(net_time_valid());
+
       ports.advance(a.dt);
       app.update(a.dt, a.t);
       app.render(fb, a);

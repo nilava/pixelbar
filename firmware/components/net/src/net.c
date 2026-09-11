@@ -3,12 +3,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_netif_sntp.h"
+#include "esp_sntp.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -21,6 +24,44 @@ static const char* TAG = "net";
 // Maximum transmit power, in quarter-dBm units: 34 is 8.5 dBm. The long
 // comment at the call site explains why this is not the hardware maximum.
 static const int8_t kTxPowerQuarterDbm = 34;
+
+// The clock, and why it is allowed to be absent.
+//
+// Until the first sync there is no time, and the panel says so rather than
+// drawing 00:00 — a clock that is confidently wrong is worse than one that
+// admits it does not know yet. s_time_valid goes true exactly once, in the
+// sync callback, and never goes back: a later failed re-sync leaves the last
+// good time on screen, which drifts slowly and is still far better than
+// blanking a clock somebody is reading.
+static bool s_time_valid = false;
+
+// Asia/Kolkata, in the POSIX form where the sign is inverted: UTC+5:30 is
+// written -5:30. Settable from the web page once there is a settings path for
+// it; hard-coded until then, because a wrong offset is a wrong clock.
+#define PIXELBAR_TZ "IST-5:30"
+
+static void on_time_sync(struct timeval* tv) {
+  (void)tv;
+  if (!s_time_valid) {
+    s_time_valid = true;
+    ESP_LOGI(TAG, "clock synchronised");
+  }
+}
+
+static void start_sntp(void) {
+  static bool started = false;
+  if (started) return;
+  started = true;
+  setenv("TZ", PIXELBAR_TZ, 1);
+  tzset();
+  esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+  cfg.start = true;
+  cfg.sync_cb = on_time_sync;
+  const esp_err_t err = esp_netif_sntp_init(&cfg);
+  if (err != ESP_OK) ESP_LOGW(TAG, "sntp init: %s", esp_err_to_name(err));
+}
+
+bool net_time_valid(void) { return s_time_valid; }
 
 // The page, gzipped at build time and linked in. There is no filesystem
 // partition to put it in and there is not going to be: partitions.csv already
@@ -174,15 +215,25 @@ static esp_err_t get_root(httpd_req_t* r) {
 }
 
 static esp_err_t get_state(httpd_req_t* r) {
-  char buf[320];
+  // Local time as the panel has it, so a wrong timezone is visible from the
+  // page rather than only from standing in front of the device.
+  char clock[8] = "--:--";
+  if (s_time_valid) {
+    const time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    snprintf(clock, sizeof(clock), "%02d:%02d", tm.tm_hour, tm.tm_min);
+  }
+  char buf[360];
   const int n = snprintf(
       buf, sizeof(buf),
       "{\"screen\":\"%s\",\"status\":\"%s\",\"brightness\":%u,"
       "\"timer_left\":%d,\"timer_running\":%s,\"fps\":%.1f,"
-      "\"detents\":%ld,\"illegal\":%lu,\"ip\":\"%s\"}",
+      "\"detents\":%ld,\"illegal\":%lu,\"ip\":\"%s\","
+      "\"clock\":\"%s\"}",
       s_status.screen, s_status.status, s_status.brightness, s_status.timer_left_s,
       s_status.timer_running ? "true" : "false", s_status.fps,
-      (long)s_status.detents, (unsigned long)s_status.illegal, s_ip);
+      (long)s_status.detents, (unsigned long)s_status.illegal, s_ip, clock);
   httpd_resp_set_type(r, "application/json");
   return httpd_resp_send(r, buf, n);
 }
@@ -226,6 +277,7 @@ static esp_err_t start_server(void) {
 // The server is started from the event that brings the address, on the event
 // task, so app_main never waits for a network to come up.
 static void on_got_ip(void* arg, esp_event_base_t base, int32_t id, void* data) {
+  start_sntp();
   if (!s_server) {
     if (start_server() == ESP_OK) ESP_LOGI(TAG, "web ui on http://%s", s_ip);
   }

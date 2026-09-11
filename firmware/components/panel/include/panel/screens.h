@@ -92,6 +92,11 @@ struct UiState {
   int hour = 0;
   int minute = 0;
   int second = 0;
+  // Whether those three mean anything yet. Before the first SNTP sync there is
+  // no time at all, and the Clock screen draws dashes rather than 00:00 — a
+  // clock that is confidently wrong is worse than one that admits it is
+  // waiting.
+  bool time_valid = false;
   bool wifi_connected = false;
 };
 
