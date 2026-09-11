@@ -94,11 +94,22 @@ void blit_offset(Framebuffer& dst, const Framebuffer& src, float dx, float dy);
 // the left column in place forever, and there would be no movement there at all
 // to fade out; a few columns of offset keeps the ratio dramatic while still
 // letting the whole panel clear.
-constexpr float kDiskHubRadius = 5.0f;
+constexpr float kDiskHubRadius = 3.0f;
 
-// `turn` is rows of displacement per unit radius. The rim clears the panel at
-// about 0.29, by which point the hub has moved a little over one row.
-constexpr float kDiskClearTurn = 0.29f;
+// `turn` is rows of displacement per unit radius.
+//
+// The rim would clear an eight-row panel at about 0.3, and that was the first
+// choice — which was wrong, and is why the effect could not be seen. At that
+// figure the hub end travels 1.4 rows, which over four hundred milliseconds is
+// close enough to still that most of the panel was simply cross-fading. The
+// visible part of a disk turning is the *difference* between the ends, and
+// there is no difference to see if one end does not move.
+//
+// So the rim over-travels instead: it leaves in the first third and keeps
+// going, which is exactly what the outer edge of a record does. At 0.85 the
+// hub moves 2.5 rows and the rim 22 — a ratio approaching nine to one, and a
+// shear that visibly slices the outgoing screen on its way past.
+constexpr float kDiskClearTurn = 0.85f;
 
 // dst += src displaced by the disk shear.
 //

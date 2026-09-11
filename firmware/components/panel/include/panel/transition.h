@@ -45,7 +45,10 @@ float transition_seconds(TransitionKind k);
 
 constexpr float kTransitionSeconds = 0.25f;
 // A disk has mass. It takes longer to come round, and it settles.
-constexpr float kDiskSeconds = 0.42f;
+//
+// Long enough to be seen, now that a detent arriving mid-turn retargets it
+// rather than starting it again.
+constexpr float kDiskSeconds = 0.50f;
 
 // Deterministic dissolve order. 89 is coprime with 192, so this is a bijection
 // over the panel: every pixel gets a distinct rank and the dissolve can be
