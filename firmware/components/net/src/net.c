@@ -122,7 +122,18 @@ static esp_timer_handle_t s_ap_down_timer = NULL;
 net_mode_t net_mode(void) { return s_mode; }
 const char* net_setup_ssid(void) { return s_ap_ssid; }
 
-static void retry_connect(void* arg) { esp_wifi_connect(); }
+// The station half has nothing to connect to while the device is in setup
+// mode and nobody has submitted the form yet. Calling connect anyway makes it
+// hunt for an unconfigured SSID every few seconds — each attempt taking the
+// radio off the AP's channel, and filling the log with reason 201 — while a
+// phone is trying to hold a connection to the portal.
+static bool should_connect(void) {
+  return s_mode != NET_MODE_SETUP || s_trying;
+}
+
+static void retry_connect(void* arg) {
+  if (should_connect()) esp_wifi_connect();
+}
 
 // ------------------------------------------------------------ the setup AP
 
@@ -223,7 +234,7 @@ static void scan_and_report(void) {
 
 static void on_wifi(void* arg, esp_event_base_t base, int32_t id, void* data) {
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-    esp_wifi_connect();
+    if (should_connect()) esp_wifi_connect();
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
     s_connected = false;
     s_ip[0] = 0;
@@ -290,7 +301,7 @@ static void on_wifi(void* arg, esp_event_base_t base, int32_t id, void* data) {
       start_setup_ap();
     }
 
-    if (s_retry_timer) {
+    if (s_retry_timer && should_connect()) {
       esp_timer_stop(s_retry_timer);
       esp_timer_start_once(s_retry_timer, (uint64_t)delay_ms * 1000);
     }
@@ -451,11 +462,20 @@ static void json_escape(const char* in, char* out, size_t cap) {
 static esp_err_t get_wifi_scan(httpd_req_t* r) {
   // Blocking, on the server's own task. That is allowed here and not in the
   // event handler: this task exists to wait on things, and a scan is about two
-  // seconds. The station half is disconnected first because a scan returns
-  // nothing while a join is in flight — found the hard way.
-  s_scanning = true;
-  if (s_retry_timer) esp_timer_stop(s_retry_timer);
-  esp_wifi_disconnect();
+  // seconds.
+  //
+  // Whether to drop the station first depends on what it is doing. A scan
+  // returns nothing while a *join is in flight*, so an unconnected radio has
+  // to be stood down first. An already-associated one must not be: the
+  // request arrived over that association, and disconnecting kills the socket
+  // the reply has to go back down. That is why this endpoint first returned
+  // an empty body from the home network while working perfectly in setup.
+  const bool stand_down = !s_connected;
+  if (stand_down) {
+    s_scanning = true;
+    if (s_retry_timer) esp_timer_stop(s_retry_timer);
+    esp_wifi_disconnect();
+  }
 
   wifi_scan_config_t sc = {0};
   const esp_err_t err = esp_wifi_scan_start(&sc, true);
@@ -465,7 +485,7 @@ static esp_err_t get_wifi_scan(httpd_req_t* r) {
 
   wifi_ap_record_t recs[20];
   if (n) esp_wifi_scan_get_ap_records(&n, recs);
-  s_scanning = false;
+  if (stand_down) s_scanning = false;
 
   char buf[1280];
   int at = snprintf(buf, sizeof(buf), "{\"networks\":[");
@@ -484,8 +504,9 @@ static esp_err_t get_wifi_scan(httpd_req_t* r) {
   }
   at += snprintf(buf + at, sizeof(buf) - at, "]}");
 
-  // Whatever the scan did, go back to trying the stored network.
-  if (!s_trying && s_mode != NET_MODE_SETUP) esp_wifi_connect();
+  // Only if we took it down. Calling connect on a live association would
+  // tear down the very socket this reply is about to use.
+  if (stand_down && !s_trying) esp_wifi_connect();
 
   httpd_resp_set_type(r, "application/json");
   return httpd_resp_send(r, buf, at);
@@ -666,9 +687,14 @@ esp_err_t net_start(void) {
   // page overrides the build for good. The alternative, letting the compiled
   // pair win every boot, silently undoes provisioning on the next reflash.
   char ssid[33] = {0}, pass[65] = {0};
+  //
+  // Seeding happens once per device, not once per empty NVS. After "forget
+  // this network" NVS is empty too, and re-seeding there would rejoin the
+  // network the user just asked the device to forget.
   if (!creds_load(ssid, sizeof(ssid), pass, sizeof(pass))) {
-    if (PIXELBAR_WIFI_SSID[0] != '\0') {
+    if (PIXELBAR_WIFI_SSID[0] != '\0' && !creds_seeded()) {
       creds_save(PIXELBAR_WIFI_SSID, PIXELBAR_WIFI_PASS);
+      creds_mark_seeded();
       creds_load(ssid, sizeof(ssid), pass, sizeof(pass));
       ESP_LOGI(TAG, "seeded credentials from the build");
     }

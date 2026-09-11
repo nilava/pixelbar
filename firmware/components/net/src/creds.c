@@ -26,6 +26,11 @@ static const char* TAG = "creds";
 // by what the value is, rather than a namespace per subsystem.
 #define CREDS_NS "pixelbar"
 #define CREDS_KEY "wifi"
+// Set the first time the build's credentials are seeded into NVS, and never
+// cleared. Without it, "forget this network" is a no-op with a reboot in the
+// middle: the clear empties NVS, the next boot finds it empty, seeds from
+// secrets.h again, and rejoins the network the user just asked it to forget.
+#define CREDS_SEEDED_KEY "seeded"
 
 typedef struct {
   uint8_t version;
@@ -80,6 +85,27 @@ bool creds_save(const char* ssid, const char* pass) {
   return true;
 }
 
+bool creds_seeded(void) {
+  nvs_handle_t h;
+  if (nvs_open(CREDS_NS, NVS_READONLY, &h) != ESP_OK) return false;
+  uint8_t v = 0;
+  const esp_err_t err = nvs_get_u8(h, CREDS_SEEDED_KEY, &v);
+  nvs_close(h);
+  return err == ESP_OK && v != 0;
+}
+
+bool creds_mark_seeded(void) {
+  nvs_handle_t h;
+  if (nvs_open(CREDS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+  esp_err_t err = nvs_set_u8(h, CREDS_SEEDED_KEY, 1);
+  if (err == ESP_OK) err = nvs_commit(h);
+  nvs_close(h);
+  return err == ESP_OK;
+}
+
+// Deliberately leaves the seeded marker alone. Clearing it too would put the
+// build's credentials back on the next boot, which is the opposite of what
+// the user asked for.
 bool creds_clear(void) {
   nvs_handle_t h;
   if (nvs_open(CREDS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
