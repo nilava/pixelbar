@@ -17,14 +17,20 @@
 #include "panel/transition.h"
 #include "ui/gesture.h"
 #include "ui/ports.h"
+#include "ui/settings_tree.h"
 
 namespace ui {
 
 // The three views the knob cycles at rest. Scene joins them once the pattern
 // engine is folded in.
+// The carousel the knob turns through at rest.
+//
+// Scene is here because a scene you can pick and never see is the same defect
+// as a setting that persists and does nothing — and the ambient patterns were
+// a whole drawing system with no way to reach them at all.
 constexpr panel::Screen kHomeViews[] = {panel::Screen::Status, panel::Screen::Clock,
-                                        panel::Screen::Timer};
-constexpr int kHomeViewCount = 3;
+                                        panel::Screen::Timer, panel::Screen::Scene};
+constexpr int kHomeViewCount = 4;
 
 // How deep navigation can go. Home, then a group, then a setting, plus slack.
 constexpr int kNavDepth = 4;
@@ -123,6 +129,32 @@ class App {
   // is reset to depth one so that a press or a turn leaves normally rather
   // than popping back into a screen the user never chose.
   void show_net(panel::Screen s);
+
+  // The settings tree. `group_index_` and `item_index_` are where you are in
+  // it; ui_.menu_index is whichever of the two the current list is showing,
+  // because the draw layer only ever has one list on screen.
+  void refresh_menu();    // the groups
+  void refresh_group();   // the settings inside the current group
+  void refresh_setting(); // the value text and rail for the current setting
+  void apply_settings();  // push the struct into the live UiState
+  const SettingDesc* current_setting() const;
+  int group_index_ = 0;
+  int item_index_ = 0;
+  // The rendered value, owned here so nothing downstream needs a static
+  // buffer two screens could fight over.
+  char set_text_[16] = {0};
+
+  // The rows of whichever list is on screen, copied out of the tree.
+  //
+  // Not a pointer into the tables: those are arrays of SettingGroup and
+  // SettingDesc, and handing the draw layer a `MenuEntry*` to the first row of
+  // one would have it index by the wrong stride — which read plausible
+  // garbage rather than crashing, until a test walked the whole tree. Copying
+  // six rows a keypress is nothing, and it means the panel takes exactly the
+  // type it draws.
+  static constexpr int kMaxListItems = 12;
+  panel::MenuEntry list_buf_[kMaxListItems];
+
   // True for the three network notices, which share a way in and a way out.
   static bool is_net_screen(panel::Screen s) {
     return s == panel::Screen::WifiSetup || s == panel::Screen::WifiConnecting ||

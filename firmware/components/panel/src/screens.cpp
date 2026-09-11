@@ -87,6 +87,9 @@ const char* screen_name(Screen s) {
     case Screen::Clock: return "clock";
     case Screen::Timer: return "timer";
     case Screen::Menu: return "menu";
+    case Screen::Group: return "group";
+    case Screen::Setting: return "setting";
+    case Screen::Scene: return "scene";
     case Screen::StatusPick: return "statuspick";
     case Screen::Brightness: return "brightness";
     case Screen::ColorPick: return "colorpick";
@@ -98,6 +101,29 @@ const char* screen_name(Screen s) {
     case Screen::WifiInfo: return "wifiinfo";
     default: return "?";
   }
+}
+
+// The scenes, in picker order.
+//
+// Not every Pattern is a scene. Text and Clock duplicate screens that already
+// exist and would be two ways to reach the same picture; MapTest is a wiring
+// diagnostic that belongs under a menu nobody browses. What is left is the
+// four that are worth looking at.
+namespace {
+const Pattern kScenes[] = {Pattern::Solid, Pattern::Rainbow, Pattern::Plasma,
+                           Pattern::Sparkle};
+const char* const kSceneNames[] = {"SOLID", "RAINBOW", "PLASMA", "SPARKLE"};
+constexpr int kSceneCount = static_cast<int>(sizeof(kScenes) / sizeof(kScenes[0]));
+}  // namespace
+
+int scene_count() { return kSceneCount; }
+Pattern scene_pattern(int index) {
+  if (index < 0 || index >= kSceneCount) index = 0;
+  return kScenes[index];
+}
+const char* scene_name(int index) {
+  if (index < 0 || index >= kSceneCount) index = 0;
+  return kSceneNames[index];
 }
 
 int tiny_number_width(int digits) { return digits * kTinyAdvance - 1; }
@@ -112,6 +138,36 @@ void draw_tiny_number(Framebuffer& fb, int x, int y, int value, int digits, RGB 
     if (!blank || i == digits - 1 || value > 0 || d != 0) {
       draw_tiny_digit(fb, x + i * kTinyAdvance, y, static_cast<char>('0' + d), color);
     }
+  }
+}
+
+void draw_list_row(Framebuffer& fb, const MenuEntry& e, int idx, int count,
+                   const Anim& a) {
+  // The item breathes gently so a list left open does not look frozen, and the
+  // one icon that means "machinery" turns while you look at it. That is the
+  // difference between an icon and a picture of an icon.
+  const float k = 0.86f + 0.14f * a.wave(3.2f);
+  const RGB lit = e.color.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
+  if (e.spins) {
+    draw_sprite_rotated(fb, sprite_of(*e.icon), kIconX + kIconW * 0.5f,
+                        kIconH * 0.5f, a.phase(6.0f), lit, 1.0f, 1.0f,
+                        Blend::Add, kIconX, kIconX + kIconW);
+  } else {
+    draw_icon(fb, kIconX, 0, *e.icon, lit);
+  }
+  // Grey rather than white. A label lights all three channels, and at 220 the
+  // brightest entries went over the 2500 mA cap on their own — which would
+  // have dimmed some rows and not others as you scrolled.
+  mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, e.label,
+                          RGB(140, 140, 140));
+
+  // Where you are in the list, as ticks along the bottom row. At eight entries
+  // and fifteen columns of label there is no room for a number, and a position
+  // you can see at a glance beats one you have to read.
+  const int span = kWidth - kLabelX;
+  for (int i = 0; i < count && i < span; ++i) {
+    const int x = kLabelX + (i * span) / count;
+    fb.set(x, 7, i == idx ? lit : e.color.scaled(30));
   }
 }
 
@@ -394,38 +450,74 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       break;
     }
 
-    case Screen::Menu: {
-      const int n = kMenuCount;
+    case Screen::Menu:
+    case Screen::Group: {
+      // Two levels of the same list. What differs is only what is in it, which
+      // the model supplies, so both draw through one function rather than
+      // drifting apart as one of them is tweaked.
+      const MenuEntry* items = ui.list ? ui.list : kMenu;
+      const int n = ui.list ? ui.list_count : kMenuCount;
+      if (n <= 0) break;
       int idx = ui.menu_index;
       if (idx < 0 || idx >= n) idx = 0;
-      const MenuEntry& e = kMenu[idx];
+      draw_list_row(fb, items[idx], idx, n, a);
+      break;
+    }
 
-      // The item breathes gently so a menu left open does not look frozen, and
-      // the one icon that means "machinery" turns while you look at it. That is
-      // the difference between an icon and a picture of an icon.
-      const float k = 0.86f + 0.14f * a.wave(3.2f);
-      const RGB lit = e.color.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
-      if (e.spins) {
-        draw_sprite_rotated(fb, sprite_of(*e.icon), kIconX + kIconW * 0.5f,
-                            kIconH * 0.5f, a.phase(6.0f), lit, 1.0f, 1.0f,
-                            Blend::Add, kIconX, kIconX + kIconW);
+    case Screen::Setting: {
+      // One screen for every kind of setting, because they differ by a few
+      // pixels and not by a layout: an icon that says which setting, the value
+      // as text, and a rail underneath when the value is a range.
+      //
+      // The value arrives already rendered — "ON", "25M", "PLASMA" — so this
+      // never has to know what any particular setting means. That knowledge
+      // belongs with the struct the value came out of.
+      const float k = 0.88f + 0.12f * a.wave(2.6f);
+      const RGB lit = ui.set_tint.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
+
+      if (ui.set_icon) {
+        // A toggle that is off is drawn dim rather than absent: the icon is
+        // what tells you which setting you are looking at, and hiding it to
+        // show a state would cost the identity to show the value.
+        draw_icon(fb, kIconX, 0, *ui.set_icon,
+                  ui.set_on || ui.set_fraction >= 0.0f ? lit : ui.set_tint.scaled(45));
+      }
+
+      // The value fills the label box. Long choices scroll rather than clip,
+      // for the same reason an SSID does: a name you cannot read in full is
+      // not a choice you can make.
+      const char* text = ui.set_text ? ui.set_text : "";
+      const int w = mini_measure_text(text);
+      const int y = ui.set_fraction >= 0.0f ? 0 : 1;
+      if (w <= kMiniLabelBox) {
+        mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, y, text, RGB(170, 170, 170));
       } else {
-        draw_icon(fb, kIconX, 0, *e.icon, lit);
+        const float span = static_cast<float>(w + kMiniLabelBox);
+        const float x = static_cast<float>(kMiniLabelBox) - a.phase(span / 9.0f) * span;
+        mini_draw_text_aa(fb, static_cast<float>(kLabelX) + x, y, text,
+                          RGB(170, 170, 170), kLabelX, kWidth);
       }
-      // Grey rather than white. A label lights all three channels, and at 220
-      // the brightest entries went over the 2500 mA cap on their own — which
-      // would have dimmed some menu rows and not others as you scrolled.
-      mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, e.label,
-                              RGB(140, 140, 140));
 
-      // Where you are in the list, as ticks along the bottom row. At eight
-      // entries and fifteen columns of label there is no room for a number, and
-      // a position you can see at a glance beats one you have to read.
-      const int span = kWidth - kLabelX;
-      for (int i = 0; i < n && i < span; ++i) {
-        const int x = kLabelX + (i * span) / n;
-        fb.set(x, 7, i == idx ? lit : e.color.scaled(30));
+      // The rail, for anything with a range. A toggle has nowhere to be along
+      // a line, so it does not get one.
+      if (ui.set_fraction >= 0.0f) {
+        draw_bar(fb, 7, 7, ui.set_fraction, lit, ui.set_tint.scaled(28));
       }
+      break;
+    }
+
+    case Screen::Scene: {
+      // The ambient patterns, which until now were a second drawing system
+      // with no way to reach them. Rendered here so a scene is a screen like
+      // any other and can be transitioned into and out of.
+      static Engine engine;
+      static uint8_t current = 0xFF;
+      const Pattern p = scene_pattern(ui.scene);
+      if (current != ui.scene) {
+        current = ui.scene;
+        engine.set_pattern(p);
+      }
+      engine.render_us(fb, static_cast<micros_t>(a.t * 1e6));
       break;
     }
 

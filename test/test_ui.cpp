@@ -9,6 +9,7 @@
 
 #include "harness.h"
 #include "panel/config.h"
+#include "panel/mini_font.h"
 #include "ui/app.h"
 #include "ui/gesture.h"
 
@@ -892,20 +893,32 @@ class AppRig {
 
   // Hold the knob to open the menu, scroll to a labelled entry, press it.
   void open_menu() { press(0.7f); settle(); }
-  void menu_to(const char* label) {
-    for (int guard = 0; guard < panel::kMenuCount + 1; ++guard) {
+  // Scrolls the list that is currently on screen to the named entry. Reads the
+  // labels out of UiState rather than out of a table, so it works for both
+  // levels of the tree without being told which one it is looking at.
+  void list_to(const char* label) {
+    const int n = app.state().list_count;
+    for (int guard = 0; guard <= n; ++guard) {
       const int i = app.state().menu_index;
-      const char* here = panel::kMenu[i].label;
-      if (std::strcmp(here, label) == 0) return;
+      if (i >= 0 && i < n && app.state().list &&
+          std::strcmp(app.state().list[i].label, label) == 0)
+        return;
       turn(1);
       settle();
     }
   }
-  void enter(const char* label) {
+  void menu_to(const char* label) { list_to(label); }
+  // Group, then item. A one-argument call opens a shortcut group.
+  void enter(const char* group, const char* item = nullptr) {
     open_menu();
-    menu_to(label);
+    list_to(group);
     press();
     settle();
+    if (item) {
+      list_to(item);
+      press();
+      settle();
+    }
   }
 
   TestPorts ports;
@@ -954,6 +967,8 @@ void test_app_boot_and_views() {
     r.tap(2); r.settle();
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Timer));
     r.tap(2); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Scene));
+    r.tap(2); r.settle();
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
 
     r.turn(1); r.settle();
@@ -961,7 +976,18 @@ void test_app_boot_and_views() {
     r.turn(-1); r.settle();
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
     r.turn(-1); r.settle();  // wrapping backwards
-    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Timer));
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Scene));
+
+    // Every home view is walked, in order, and the list closes on itself.
+    // Written against kHomeViews rather than a copy of it, so adding a view
+    // extends the test instead of quietly escaping it.
+    AppRig q;
+    for (int i = 0; i < kHomeViewCount; ++i) {
+      CHECK_EQ(static_cast<int>(q.app.screen()), static_cast<int>(kHomeViews[i]));
+      q.turn(1);
+      q.settle();
+    }
+    CHECK_EQ(static_cast<int>(q.app.screen()), static_cast<int>(kHomeViews[0]));
   }
 
   CASE("a swipe walks the views too, and in the direction it ran");
@@ -1064,54 +1090,81 @@ void test_app_adjust() {
     CHECK_EQ(r.app.depth(), 2);
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Menu));
 
-    r.menu_to("DIM");
+    r.list_to("DISP");
     r.press(); r.settle();
     CHECK_EQ(r.app.depth(), 3);
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Group));
+
+    r.list_to("DIM");
+    r.press(); r.settle();
+    CHECK_EQ(r.app.depth(), 4);
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Brightness));
 
-    // Pressing accepts and returns to the menu you came from, rather than
+    // Pressing accepts and returns to the list you came from, rather than
     // stepping on to some unrelated setting.
     r.press(); r.settle();
+    CHECK_EQ(r.app.depth(), 3);
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Group));
+
+    // And holding backs out a level at a time, the same way it went in.
+    r.press(0.7f); r.settle();
     CHECK_EQ(r.app.depth(), 2);
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Menu));
 
-    // And holding backs out of the menu the same way it opened it.
     r.press(0.7f); r.settle();
     CHECK_EQ(r.app.depth(), 1);
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
   }
 
-  CASE("every menu entry goes to exactly one place");
+  CASE("every group leads somewhere, and every setting is reachable");
   {
-    const struct { const char* label; panel::Screen screen; } kWant[] = {
-        {"STAT", panel::Screen::StatusPick},
-        {"TIME", panel::Screen::TimerSet},
-        {"DIM", panel::Screen::Brightness},
-        {"HUE", panel::Screen::ColorPick},
-    };
-    for (const auto& w : kWant) {
+    // The whole tree, walked. The point is coverage rather than any one path:
+    // a setting added to the table with no way in, or a group whose shortcut
+    // points at nothing, fails here rather than on the bench.
+    for (int g = 0; g < ui::kGroupCount; ++g) {
+      const ui::SettingGroup& grp = ui::kGroups[g];
       AppRig r;
-      r.enter(w.label);
-      CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(w.screen));
-      r.press();
-      r.settle();
-      if (w.screen == panel::Screen::StatusPick) {
-        // The one deliberate exception. Pressing here does not accept a setting
-        // and step back, it *claims a status* — and the result of that is the
-        // room-facing screen, so showing you the menu again would be hiding the
-        // thing you just did.
-        CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
-        CHECK_EQ(r.app.depth(), 1);
-      } else {
-        CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Menu));
+      r.enter(grp.row.label);
+      if (grp.direct != panel::Screen::Count) {
+        CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(grp.direct));
+        continue;
+      }
+      CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Group));
+      CHECK_EQ(r.app.state().list_count, static_cast<int>(grp.count));
+      for (int i = 0; i < grp.count; ++i) {
+        const ui::SettingDesc& d = grp.items[i];
+        AppRig q;
+        q.enter(grp.row.label, d.row.label);
+        const panel::Screen want = d.kind == ui::SettingKind::Screen
+                                       ? d.screen
+                                       : panel::Screen::Setting;
+        CHECK_EQ(static_cast<int>(q.app.screen()), static_cast<int>(want));
+        // And back out again to where it came from.
+        q.press();
+        q.settle();
+        CHECK_EQ(static_cast<int>(q.app.screen()), static_cast<int>(panel::Screen::Group));
       }
     }
+  }
+
+  CASE("claiming a status from the menu shows the status, not the menu");
+  {
+    // The one deliberate exception to "pressing accepts and steps back".
+    // Pressing here claims a status, and the result of that is the
+    // room-facing screen — showing the menu again would hide what you just did.
+    AppRig r;
+    r.enter("STAT");
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::StatusPick));
+    r.press();
+    r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
+    CHECK_EQ(r.app.depth(), 1);
   }
 
   CASE("turning on the brightness screen changes brightness, and clamps");
   {
     AppRig r;
-    r.enter("DIM");
+    r.enter("DISP", "DIM");
     const int before = r.app.state().brightness;
     r.turn(5); r.settle();
     CHECK(r.app.state().brightness > before);
@@ -1127,7 +1180,7 @@ void test_app_adjust() {
   CASE("the colour picker commits its hue to the accent");
   {
     AppRig r;
-    r.enter("HUE");
+    r.enter("DISP", "HUE");
     const panel::RGB before = r.app.state().accent;
     r.turn(6); r.settle();
     const panel::RGB after = r.app.state().accent;
@@ -1138,7 +1191,7 @@ void test_app_adjust() {
   CASE("a shake backs out of an adjuster but does nothing at home");
   {
     AppRig r;
-    r.enter("DIM");
+    r.enter("DISP", "DIM");
     CHECK(r.app.depth() > 1);
     r.app.handle(Event(EventType::Shake), 0.0);
     r.settle();
@@ -1166,7 +1219,7 @@ void test_app_adjust() {
     r.settle();
     CHECK_EQ(r.app.state().brightness, before);  // nothing happened to it
 
-    r.enter("DIM");
+    r.enter("DISP", "DIM");
     r.turn(4);
     r.settle();
     CHECK(r.app.state().brightness > before);  // and here it does
@@ -1212,7 +1265,7 @@ void test_app_sleep_and_settings() {
   CASE("settings are written once a knob stops moving, not once per detent");
   {
     AppRig r;
-    r.enter("DIM");
+    r.enter("DISP", "DIM");
     r.ports.saves = 0;
     for (int i = 0; i < 20; ++i) r.turn(1);  // a sweep
     CHECK_EQ(r.ports.saves, 0);              // nothing yet
@@ -1225,7 +1278,7 @@ void test_app_sleep_and_settings() {
   CASE("what was saved comes back on the next boot");
   {
     AppRig r;
-    r.enter("DIM");
+    r.enter("DISP", "DIM");
     for (int i = 0; i < 10; ++i) r.turn(1);
     r.run(2.0f);
     const int saved = r.app.state().brightness;
@@ -1295,10 +1348,10 @@ void test_app_menu() {
     CHECK_EQ(r.app.state().menu_index, 0);
     r.turn(1); r.settle();
     CHECK_EQ(r.app.state().menu_index, 1);
-    for (int i = 0; i < panel::kMenuCount - 1; ++i) { r.turn(1); r.settle(); }
+    for (int i = 0; i < ui::kGroupCount - 1; ++i) { r.turn(1); r.settle(); }
     CHECK_EQ(r.app.state().menu_index, 0);   // all the way round
     r.turn(-1); r.settle();
-    CHECK_EQ(r.app.state().menu_index, panel::kMenuCount - 1);
+    CHECK_EQ(r.app.state().menu_index, ui::kGroupCount - 1);
   }
 
   CASE("STAT opens the picker on the status you are actually showing");
@@ -1358,7 +1411,7 @@ void test_app_flourish() {
   {
     AppRig r;
     // Dial the timer down to one minute so the test does not run for 25.
-    r.enter("TIME");
+    r.enter("TIME", "TASK");
     for (int i = 0; i < 40; ++i) r.turn(-1);
     r.settle();
     CHECK_EQ(r.app.state().timer_set_min, 1);
@@ -1377,7 +1430,7 @@ void test_app_flourish() {
   CASE("and it clears itself without being touched");
   {
     AppRig r;
-    r.enter("TIME");
+    r.enter("TIME", "TASK");
     for (int i = 0; i < 40; ++i) r.turn(-1);
     r.settle();
     r.app.handle(Event(EventType::DoublePress), 0.0);
@@ -1395,7 +1448,7 @@ void test_app_flourish() {
   {
     // A moment you have to sit through is an obstacle, not a flourish.
     AppRig r;
-    r.enter("TIME");
+    r.enter("TIME", "TASK");
     for (int i = 0; i < 40; ++i) r.turn(-1);
     r.settle();
     r.app.handle(Event(EventType::DoublePress), 0.0);
@@ -1420,7 +1473,7 @@ void test_app_flourish() {
     CHECK_EQ(r.app.state().menu_index, 0);
     r.turn(3);
     r.settle();
-    CHECK_EQ(r.app.state().menu_index, 3 % panel::kMenuCount);
+    CHECK_EQ(r.app.state().menu_index, 3 % ui::kGroupCount);
   }
 
   CASE("and a fast turn on the carousel does not skip past where you aimed");
@@ -1463,6 +1516,110 @@ void test_app_flourish() {
   }
 }
 
+
+void test_settings_tree() {
+  CASE("every label fits the box it is drawn in");
+  {
+    // Measured, not eyeballed. A label wider than fifteen columns is clipped
+    // beside its icon, and the only way to know is to measure — M and W are
+    // five columns in this font, so four characters is not the rule.
+    for (int g = 0; g < ui::kGroupCount; ++g) {
+      CHECK(panel::mini_text_fits(ui::kGroups[g].row.label));
+      for (int i = 0; i < ui::kGroups[g].count; ++i)
+        CHECK(panel::mini_text_fits(ui::kGroups[g].items[i].row.label));
+    }
+  }
+
+  CASE("every setting round-trips through get and set");
+  {
+    // The two switches are written by hand and the compiler only checks that
+    // every case exists, not that they agree. A setting whose get reads one
+    // field and whose set writes another would be invisible until someone
+    // changed it and it did nothing.
+    for (int g = 0; g < ui::kGroupCount; ++g) {
+      for (int i = 0; i < ui::kGroups[g].count; ++i) {
+        const ui::SettingDesc& d = ui::kGroups[g].items[i];
+        // A setting with its own screen keeps its range there, so lo and hi
+        // here are placeholders and walking them would mean nothing.
+        if (d.kind == ui::SettingKind::Screen) continue;
+        ui::Settings s;
+        for (int v = d.lo; v <= d.hi; v += (d.step > 0 ? d.step : 1)) {
+          ui::setting_set(s, d.id, v);
+          CHECK_EQ(ui::setting_get(s, d.id), v);
+        }
+      }
+    }
+  }
+
+  CASE("a setting changed on the panel reaches the stored struct and is saved");
+  {
+    // The whole point of the tree. Before it, these fields were written to
+    // NVS, migrated and sanitised, and could not be changed by any gesture.
+    AppRig r;
+    r.enter("TILT", "FLAT");
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Setting));
+    const bool before = r.app.settings().flat_sleeps;
+    r.turn(1);
+    r.settle();
+    CHECK(r.app.settings().flat_sleeps != before);
+
+    // And it is written out, once the knob stops rather than once per detent.
+    r.run(2.0f);
+    CHECK(r.ports.saves >= 1);
+    CHECK(r.ports.stored.flat_sleeps != before);
+  }
+
+  CASE("a number clamps at its ends and a choice wraps round");
+  {
+    AppRig r;
+    r.enter("TIME", "SETS");           // cycles, 1..12
+    for (int i = 0; i < 40; ++i) r.turn(1);
+    r.settle();
+    CHECK_EQ(static_cast<int>(r.app.settings().cycles), 12);
+    for (int i = 0; i < 40; ++i) r.turn(-1);
+    r.settle();
+    CHECK_EQ(static_cast<int>(r.app.settings().cycles), 1);
+
+    AppRig q;
+    q.enter("IDLE", "PICK");           // the scene list, four long
+    const int first = q.app.settings().scene;
+    for (int i = 0; i < panel::scene_count(); ++i) { q.turn(1); q.settle(); }
+    CHECK_EQ(static_cast<int>(q.app.settings().scene), first);
+  }
+
+  CASE("the value reads as words where a number would be meaningless");
+  {
+    ui::Settings s;
+    char buf[16];
+    // A toggle says what it is, not 0 or 1.
+    const ui::SettingDesc* flat = nullptr;
+    for (int g = 0; g < ui::kGroupCount && !flat; ++g)
+      for (int i = 0; i < ui::kGroups[g].count; ++i)
+        if (ui::kGroups[g].items[i].id == ui::SettingId::FlatSleeps)
+          flat = &ui::kGroups[g].items[i];
+    CHECK(flat != nullptr);
+    ui::setting_set(s, ui::SettingId::FlatSleeps, 1);
+    CHECK(std::strcmp(ui::setting_text(s, *flat, buf, sizeof(buf)), "ON") == 0);
+    ui::setting_set(s, ui::SettingId::FlatSleeps, 0);
+    CHECK(std::strcmp(ui::setting_text(s, *flat, buf, sizeof(buf)), "OFF") == 0);
+    // And a toggle has no position along a line, so it draws no rail.
+    CHECK(ui::setting_fraction(s, *flat) < 0.0f);
+  }
+
+  CASE("the timer length dialled on the panel survives a power cut");
+  {
+    // It did not: the TimerSet screen wrote UiState and never the struct, so
+    // the length was right until the next boot and then quietly twenty-five.
+    AppRig r;
+    r.enter("TIME", "TASK");
+    for (int i = 0; i < 5; ++i) r.turn(-1);
+    r.settle();
+    r.run(2.0f);
+    const int dialled = r.app.state().timer_set_min;
+    CHECK(dialled != 25);
+    CHECK_EQ(static_cast<int>(r.ports.stored.work_min), dialled);
+  }
+}
 
 void test_net_screens() {
   CASE("a device with no credentials says so, once the boot is over");
@@ -1664,6 +1821,7 @@ void run_ui_tests() {
   test_app_adjust();
   test_app_flourish();
   test_app_sleep_and_settings();
+  test_settings_tree();
   test_net_screens();
   test_clock_validity();
   test_view_transition();

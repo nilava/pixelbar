@@ -85,10 +85,10 @@ void App::begin(Ports& ports, double now_s) {
   if (ports_->load_settings(&loaded) && loaded.migrate()) set_ = loaded;
   set_.sanitise();
 
-  ui_.brightness = set_.brightness;
-  ui_.hue = set_.hue;
-  ui_.accent = panel::accent_from_hue(set_.hue);
-  ui_.timer_set_min = set_.work_min;
+  // One place where the stored struct becomes what the panel draws, shared
+  // with every later change, so a field added to one and not the other shows
+  // up as a setting that does nothing.
+  apply_settings();
   ui_.timer_total_s = set_.work_min * 60;
   ui_.timer_left_s = ui_.timer_total_s;
   ui_.timer_running = false;
@@ -254,6 +254,11 @@ void App::pop() {
   const TransitionKind back = inverse_of(nav_[depth_ - 1].enter_kind);
   --depth_;
   const Screen to = nav_[depth_ - 1].screen;
+  // The list the panel draws has to follow the level being returned to.
+  // Without this, backing out of a setting showed the group's items under the
+  // groups' heading — one list on screen and the other in the model.
+  if (to == Screen::Group) refresh_group();
+  else if (to == Screen::Menu) refresh_menu();
   mgr_.go_to(to, ui_, back, panel::transition_seconds(back));
 }
 
@@ -275,6 +280,71 @@ void App::go_home() {
   nav_[0] = NavFrame{home, TransitionKind::None};
   if (mgr_.current() == home) return;
   mgr_.go_to(home, ui_, back, panel::transition_seconds(back));
+}
+
+// ---------------------------------------------------------- settings tree
+//
+// Three levels, and the draw layer only ever sees one list at a time. These
+// four functions are what keeps ui_ agreeing with where the model thinks it
+// is; every navigation calls exactly one of them, and forgetting to is how a
+// list ends up showing the previous level's items.
+
+void App::refresh_menu() {
+  int n = kGroupCount;
+  if (n > kMaxListItems) n = kMaxListItems;
+  for (int i = 0; i < n; ++i) list_buf_[i] = kGroups[i].row;
+  ui_.list = list_buf_;
+  ui_.list_count = n;
+  ui_.menu_index = static_cast<uint8_t>(group_index_);
+}
+
+void App::refresh_group() {
+  const SettingGroup& g = kGroups[group_index_];
+  int n = g.count;
+  if (n > kMaxListItems) n = kMaxListItems;
+  for (int i = 0; i < n; ++i) list_buf_[i] = g.items[i].row;
+  ui_.list = list_buf_;
+  ui_.list_count = n;
+  ui_.menu_index = static_cast<uint8_t>(item_index_);
+}
+
+const SettingDesc* App::current_setting() const {
+  if (group_index_ < 0 || group_index_ >= kGroupCount) return nullptr;
+  const SettingGroup& g = kGroups[group_index_];
+  if (item_index_ < 0 || item_index_ >= g.count) return nullptr;
+  return &g.items[item_index_];
+}
+
+void App::refresh_setting() {
+  const SettingDesc* d = current_setting();
+  if (!d) return;
+  ui_.set_icon = d->row.icon;
+  ui_.set_label = d->row.label;
+  ui_.set_tint = d->row.color;
+  ui_.set_text = setting_text(set_, *d, set_text_, sizeof(set_text_));
+  ui_.set_fraction = setting_fraction(set_, *d);
+  ui_.set_on = setting_get(set_, d->id) != 0;
+}
+
+void App::apply_settings() {
+  // The settings struct is the record; UiState is what the panel draws from.
+  // Anything stored that the panel shows has to be copied across here, and a
+  // field that is not is a setting that persists and does nothing — which is
+  // exactly the defect this whole tree was built to clear.
+  ui_.brightness = set_.brightness;
+  ui_.hue = set_.hue;
+  ui_.accent = panel::accent_from_hue(set_.hue);
+  ui_.scene = set_.scene;
+  ui_.timer_set_min = set_.work_min;
+  // Retarget a timer that is not running, so the number you just dialled is
+  // the number that runs. Conditional on the target having actually changed,
+  // or adjusting the brightness would silently reset a paused countdown.
+  const int want = set_.work_min * 60;
+  if (!ui_.timer_running && ui_.timer_total_s != want) {
+    ui_.timer_total_s = want;
+    ui_.timer_left_s = want;
+    timer_accum_s_ = 0.0f;
+  }
 }
 
 void App::show_net(panel::Screen s) {
@@ -312,27 +382,37 @@ void App::goto_view(int index, int dir) {
 }
 
 void App::enter_menu_entry() {
-  const int n = panel::kMenuCount;
-  int i = ui_.menu_index;
-  if (i < 0 || i >= n) i = 0;
-  // Matched on the label rather than the index, so reordering the menu cannot
-  // silently point an entry at the wrong screen.
-  const char* label = panel::kMenu[i].label;
-  auto is = [&](const char* w) {
-    const char* a = label;
-    while (*a && *w && *a == *w) { ++a; ++w; }
-    return *a == 0 && *w == 0;
-  };
-  if (is("STAT")) {
-    ui_.pick = ui_.status;
-    push(Screen::StatusPick, TransitionKind::WipeUp);
-  } else if (is("TIME")) {
-    push(Screen::TimerSet, TransitionKind::WipeUp);
-  } else if (is("DIM")) {
-    push(Screen::Brightness, TransitionKind::WipeUp);
-  } else if (is("HUE")) {
-    push(Screen::ColorPick, TransitionKind::WipeUp);
+  // Two levels of the same gesture: pressing on the group list opens that
+  // group, pressing on a setting opens it. Matching on an index rather than on
+  // a label, as this did, because the tree is now data — an entry cannot point
+  // at the wrong screen when the entry *is* the descriptor.
+  if (screen() == Screen::Menu) {
+    group_index_ = ui_.menu_index;
+    if (group_index_ < 0 || group_index_ >= kGroupCount) group_index_ = 0;
+    const SettingGroup& g = kGroups[group_index_];
+    if (g.direct != Screen::Count) {
+      if (g.direct == Screen::StatusPick) ui_.pick = ui_.status;
+      push(g.direct, TransitionKind::WipeUp);
+      return;
+    }
+    item_index_ = 0;
+    refresh_group();
+    push(Screen::Group, TransitionKind::WipeUp);
+    return;
   }
+
+  const SettingDesc* d = current_setting();
+  if (!d) return;
+  if (d->kind == SettingKind::Screen) {
+    // Brightness and hue keep their own pickers: a value you are choosing by
+    // eye deserves to be shown as the thing itself rather than as a number
+    // describing it.
+    if (d->screen == Screen::StatusPick) ui_.pick = ui_.status;
+    push(d->screen, TransitionKind::WipeUp);
+    return;
+  }
+  refresh_setting();
+  push(Screen::Setting, TransitionKind::WipeUp);
 }
 
 void App::set_status(Status s) {
@@ -406,13 +486,13 @@ void App::adjust(int detents, float rate) {
       int v = ui_.timer_set_min + d;
       if (v < 1) v = 1;
       if (v > 99) v = 99;
-      ui_.timer_set_min = v;
-      // Retarget a timer that has not been started, so the number you just
-      // dialled is the number that runs.
-      if (!ui_.timer_running) {
-        ui_.timer_total_s = v * 60;
-        ui_.timer_left_s = ui_.timer_total_s;
-      }
+      // Into the stored struct, not only into the live state. Writing just
+      // UiState meant the length you dialled was correct until the next power
+      // cut and then quietly went back to twenty-five — a setting that
+      // appeared to work and did not survive, which is the same defect the
+      // settings tree exists to clear.
+      set_.work_min = static_cast<uint16_t>(v);
+      apply_settings();
       note_change();
       break;
     }
@@ -425,11 +505,48 @@ void App::adjust(int detents, float rate) {
       // three entries on in one movement, rather than starting and abandoning
       // three transitions in thirty milliseconds, which is what made a fast
       // turn feel like the panel was fighting itself.
-      const int n = panel::kMenuCount;
+      // Both levels of the list scroll identically; only the length differs.
+      const int n = ui_.list_count > 0 ? ui_.list_count : panel::kMenuCount;
       const int next = wrap_index(static_cast<int>(ui_.menu_index) + detents, n);
       const TransitionKind k = detents > 0 ? TransitionKind::DiskUp : TransitionKind::DiskDown;
       mgr_.restart_with(ui_, k, panel::transition_seconds(k));
       ui_.menu_index = static_cast<uint8_t>(next);
+      break;
+    }
+
+    case Screen::Group: {
+      const int n = ui_.list_count > 0 ? ui_.list_count : 1;
+      const int next = wrap_index(item_index_ + detents, n);
+      const TransitionKind k = detents > 0 ? TransitionKind::DiskUp : TransitionKind::DiskDown;
+      mgr_.restart_with(ui_, k, panel::transition_seconds(k));
+      item_index_ = next;
+      ui_.menu_index = static_cast<uint8_t>(next);
+      refresh_group();
+      break;
+    }
+
+    case Screen::Setting: {
+      const SettingDesc* d = current_setting();
+      if (!d) break;
+      // Lists wrap and ranges clamp, which is the difference between choosing
+      // and adjusting: a list has no ends worth stopping at, and a number run
+      // off its end should stay there rather than reappear at the other.
+      int v = setting_get(set_, d->id);
+      if (d->kind == SettingKind::Number) {
+        // The acceleration that applies to values applies here and nowhere
+        // else: REST runs 0..120 in fives, which is a long way at one click a
+        // step, while a list of four would only skip past what you wanted.
+        v += detents * d->step * ((rate >= kFastTurnRate) ? kFastTurnStep : 1);
+        if (v < d->lo) v = d->lo;
+        if (v > d->hi) v = d->hi;
+      } else {
+        const int n = d->option_count ? d->option_count : (d->hi - d->lo + 1);
+        v = d->lo + wrap_index(v - d->lo + detents, n);
+      }
+      setting_set(set_, d->id, v);
+      apply_settings();
+      note_change();
+      refresh_setting();
       break;
     }
 
@@ -537,7 +654,7 @@ void App::handle(const Event& e, double now_s) {
       break;
 
     case EventType::Press:
-      if (screen() == Screen::Menu) {
+      if (screen() == Screen::Menu || screen() == Screen::Group) {
         enter_menu_entry();
       } else if (screen() == Screen::StatusPick) {
         // Pressing commits what you were previewing, and the claim animation
@@ -571,6 +688,7 @@ void App::handle(const Event& e, double now_s) {
       // always a way back that does not depend on remembering how deep you are.
       if (depth_ == 1) {
         ui_.menu_index = 0;
+        refresh_menu();
         push(Screen::Menu, TransitionKind::WipeUp);
       } else {
         pop();

@@ -9,6 +9,7 @@
 #include "panel/color.h"
 #include "panel/digit_roll.h"
 #include "panel/framebuffer.h"
+#include "panel/patterns.h"
 #include "panel/icons.h"
 #include "panel/sprite.h"
 
@@ -40,6 +41,20 @@ struct MenuEntry {
 extern const MenuEntry kMenu[];
 extern const int kMenuCount;
 
+// One row of a scrolled list: icon, label, and ticks showing the position.
+// Shared by Menu and Group, which differ only in what they are a list of —
+// duplicating it would mean the two levels of the same list drifting apart.
+void draw_list_row(Framebuffer& fb, const MenuEntry& e, int idx, int count,
+                   const Anim& a);
+
+// The ambient scenes, in the order the picker offers them. A separate list
+// from Pattern because not every pattern is a scene: Text and Clock duplicate
+// screens that already exist, and MapTest is a diagnostic rather than
+// something anybody would choose to look at.
+Pattern scene_pattern(int index);
+const char* scene_name(int index);
+int scene_count();
+
 // True when the label is too wide to sit beside an icon, so the status is
 // drawn as a full-width badge instead. Derived from the label's measured
 // width rather than listed, so adding a status cannot get this wrong.
@@ -49,7 +64,10 @@ enum class Screen : uint8_t {
   Status,      // the room-facing default: one word, one colour
   Clock,
   Timer,       // focus countdown
-  Menu,        // the icon-and-label list, scrolled like a record
+  Menu,        // the settings groups: the icon-and-label list, scrolled like a record
+  Group,       // the settings inside one group, drawn as the same list
+  Setting,     // one setting being changed: toggle, number or choice
+  Scene,       // an ambient pattern, full panel
   StatusPick,  // choosing a status: the same list, drawn as the status itself
   Brightness,  // encoder adjust
   ColorPick,   // encoder adjust
@@ -107,6 +125,31 @@ struct UiState {
   // address to visit. One field because only one of them is ever on screen,
   // and the screen itself says which it is.
   const char* net_text = "";
+
+  // The list the Menu and Group screens draw, and where you are in it. Held as
+  // a pointer so the two levels share one screen's worth of drawing code and
+  // the model decides what is in the list.
+  const MenuEntry* list = nullptr;
+  int list_count = 0;
+
+  // The setting being changed, flattened for the draw layer.
+  //
+  // Deliberately pre-rendered: the model works out what the value *reads* as —
+  // "ON", "25M", "PLASMA" — and this layer only draws it. That is what lets
+  // one Setting screen serve toggles, numbers and choices rather than three
+  // screens differing by a few pixels, and it keeps the knowledge of what a
+  // setting means on the side of the seam that has the Settings struct.
+  const Icon* set_icon = nullptr;
+  const char* set_label = "";
+  const char* set_text = "";
+  RGB set_tint{255, 138, 31};
+  // 0..1 fills the rail along the bottom; negative draws no rail, which is
+  // what a toggle or a short list wants.
+  float set_fraction = -1.0f;
+  bool set_on = false;
+
+  // Which ambient pattern the Scene screen draws.
+  uint8_t scene = 0;
   bool wifi_connected = false;
 };
 

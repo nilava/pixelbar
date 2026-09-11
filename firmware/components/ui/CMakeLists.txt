@@ -4,5 +4,6 @@ idf_component_register(
     SRCS "src/gesture.cpp"
          "src/app.cpp"
          "src/virtual_pads.cpp"
+         "src/settings_tree.cpp"
     INCLUDE_DIRS "include"
     REQUIRES panel)
