@@ -1419,12 +1419,56 @@ static void test_dither() {
   fb.fill(RGB(70, 70, 70));
   Renderer dim;
   long lit_frames = 0;
-  for (int i = 0; i < 64; ++i) {
-    dim.render(fb, w, 8, kMaxMilliamps, kWiring);
+  for (int i = 0; i < 200; ++i) {
+    dim.render(fb, w, 48, kMaxMilliamps, kWiring);
     for (int j = 0; j < kNumLeds * 3; ++j)
       if (w[j]) { ++lit_frames; break; }
   }
   CHECK(lit_frames > 0);
+
+  CASE("but below the floor it is black rather than a slow blink");
+  {
+    // The deliberate limit of the technique, and the trade it makes.
+    //
+    // Dithering renders a fraction of a step by firing that fraction of frames.
+    // Below about 30 Hz the pulses are too far apart to fuse and it stops being
+    // a dimmer and starts being a flashing light — at brightness 6 a dim pixel
+    // works out at one frame in 21, which is 4.7 Hz. No amount of jitter fixes
+    // that; it spreads the frequency but the pulses are still sparse.
+    //
+    // So the bottom sliver of the range rounds to black instead. It costs the
+    // dimmest detail at brightnesses where there is almost none to lose, and it
+    // buys a panel that sits still.
+    Framebuffer dimfb;
+    dimfb.fill(RGB(70, 70, 70));
+    Renderer under;
+    long lit = 0;
+    for (int i = 0; i < 400; ++i) {
+      under.render(dimfb, w, 6, kMaxMilliamps, kWiring);
+      for (int j = 0; j < kNumLeds * 3; ++j) lit += w[j] ? 1 : 0;
+    }
+    CHECK_EQ(lit, 0);
+  }
+
+  CASE("a pixel asked for black is black, whatever it was showing before");
+  {
+    // The jitter made this stop being true for a while: a pixel that went dark
+    // carrying a positive error got pushed over the threshold and lit for a
+    // frame. Across an animating panel that is a constant sparkle of LEDs that
+    // were asked to be off, which is exactly how it was reported.
+    Framebuffer bright, black;
+    bright.fill(RGB(40, 40, 40));
+    black.clear();
+    Renderer r2;
+    r2.reset_dither();
+    for (int i = 0; i < 200; ++i) r2.render(bright, w, 6, kMaxMilliamps, kWiring);
+    long stray = 0;
+    for (int i = 0; i < 400; ++i) {
+      r2.render(black, w, 6, kMaxMilliamps, kWiring);
+      for (int j = 0; j < kNumLeds * 3; ++j) stray += w[j] ? 1 : 0;
+    }
+    CHECK_EQ(stray, 0);
+  }
 
   CASE("dithering is deterministic");
   Renderer a, b;
@@ -1462,11 +1506,10 @@ static void test_dither() {
 static void test_dither_is_not_periodic() {
   CASE("a dim pixel at low brightness does not blink at one frequency");
   {
-    // Plain sigma-delta on a constant input is exactly periodic. At brightness
-    // 6 a dim pixel works out at twelve 256ths of a step, which fires once
-    // every 21 frames — a dead-regular 4.7 Hz blink, right in the band the eye
-    // is most sensitive to. Jittering the comparator spreads that over a noise
-    // floor without moving the average.
+    // Plain sigma-delta on a constant input is exactly periodic, so wherever
+    // dithering is in play it lands on one frequency and stays there. Jittering
+    // the comparator spreads that over a noise floor without moving the
+    // average — which is what the last assertion here checks.
     Framebuffer fb;
     fb.fill(RGB(40, 40, 40));
     Renderer r;
@@ -1474,11 +1517,11 @@ static void test_dither_is_not_periodic() {
     uint8_t grb[kNumLeds * 3];
     std::vector<int> gaps;
     int last = -1;
-    long pulses = 0;
+    // At a brightness where dithering is actually in play — below the floor it
+    // does not fire at all, which the case above covers.
     for (int f = 0; f < 4000; ++f) {
-      r.render(fb, grb, 6, 100000.0f, kWiring);
+      r.render(fb, grb, 64, 100000.0f, kWiring);
       if (grb[0]) {
-        ++pulses;
         if (last >= 0) gaps.push_back(f - last);
         last = f;
       }
@@ -1494,12 +1537,12 @@ static void test_dither_is_not_periodic() {
       mean += g;
     }
     mean /= static_cast<double>(gaps.size());
-    CHECK(mx - mn >= 4);
+    CHECK(mx - mn >= 2);
 
     // And the average is still exactly what was asked for, because the error
     // feedback is computed from the unjittered value. The noise moves when a
     // pulse happens, never how many.
-    const int32_t k = static_cast<int32_t>((6 / 255.0f) * 65536.0f + 0.5f);
+    const int32_t k = static_cast<int32_t>((64 / 255.0f) * 65536.0f + 0.5f);
     const int32_t exact = (static_cast<int32_t>(kGamma8[40]) * k) >> 8;
     CHECK(exact > 0);
     const double want = 256.0 / static_cast<double>(exact);

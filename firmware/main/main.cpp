@@ -50,6 +50,11 @@ extern "C" void app_main(void) {
   static panel::Engine engine;
   static panel::ScreenManager screens;
   static panel::Renderer renderer;
+  // Seeds the per-channel dither offsets. Without this every channel starts
+  // level and they all cross the threshold on the same frame, which is a whole
+  // panel shimmering in step — far more visible than the stepping the dither
+  // exists to remove.
+  renderer.reset_dither();
   static panel::FrameClock clock;
   static panel::FpsMeter meter;
   // Double buffered: the RMT peripheral reads one while the next is drawn.

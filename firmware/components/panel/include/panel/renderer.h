@@ -6,6 +6,7 @@
 #pragma once
 #include <cstdint>
 
+#include "panel/config.h"
 #include "panel/framebuffer.h"
 
 namespace panel {
@@ -14,6 +15,20 @@ struct RenderStats {
   float power_scale = 1.0f;  // 1.0 means the cap did not engage
   float est_ma = 0.0f;
 };
+
+// The dimmest value temporal dithering can carry without being seen.
+//
+// Dithering renders a fraction of an output step by firing that fraction of
+// frames. The pulses have to be close enough together to fuse: a value of
+// 12/256 fires once every 21 frames, which at 100 fps is a 4.7 Hz blink and is
+// not a compromise, it is a flashing light. Below about 30 Hz there is nothing
+// to be done about that at one bit and one hundred frames a second — jitter
+// spreads the frequency but the pulses are still sparse and separate.
+//
+// So below this, values round down instead. It costs the dimmest sliver of the
+// range at very low brightness, where there is almost no detail to lose, and it
+// buys a panel that sits still.
+constexpr int32_t kDitherMinStep = 256 * 30 / kFramesPerSecond;
 
 class Renderer {
  public:

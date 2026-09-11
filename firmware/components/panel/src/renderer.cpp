@@ -59,7 +59,22 @@ RenderStats Renderer::render(const Framebuffer& fb, uint8_t* out_grb, uint8_t br
         const int32_t exact = (static_cast<int32_t>(gam[order[c]]) * k) >> 8;
         int32_t v = exact;
         int32_t out;
-        if (dither_) {
+        if (dither_ && exact < kDitherMinStep) {
+          // Too dim to dither without being seen, and off means off.
+          //
+          // Two things at once. A pixel asked for black must be black: one that
+          // went dark carrying a positive error would otherwise be pushed over
+          // the threshold by the jitter and light for a frame, which across an
+          // animating panel is a constant sparkle of LEDs that were asked to be
+          // off. And a pixel asked for a twentieth of a step cannot be given one
+          // at 100 fps without the pulses being far enough apart to count.
+          //
+          // Clearing the error matters as much as forcing the output. A residue
+          // left behind fires later, on a pixel that has since been asked for
+          // nothing at all.
+          out = 0;
+          err_[dst + c] = 0;
+        } else if (dither_) {
           v += err_[dst + c];
           // A noisy comparator, not a fixed one.
           //
