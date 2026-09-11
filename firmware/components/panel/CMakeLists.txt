@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS "src/color.cpp"
          "src/framebuffer.cpp"
+         "src/flourish.cpp"
          "src/font.cpp"
          "src/anim.cpp"
          "src/digit_roll.cpp"

@@ -658,6 +658,30 @@ class AppRig {
   }
   void settle() { run(1.2f); }  // long enough for any transition to finish
 
+  // Renders on the rig's own clock. Passing an arbitrary Anim::t instead would
+  // put the draw behind the model's timeline, and every element that animates
+  // against an absolute stamp — digit rolls, status swaps — would be caught
+  // mid-move by a clock that had gone backwards.
+  void render(panel::Framebuffer& fb) {
+    panel::Anim a;
+    a.dt = kTick;
+    a.t = t_;
+    app.render(fb, a);
+  }
+
+  // Advances until the timer hits zero, or gives up. Running a fixed 62 s
+  // instead would sail straight past a flourish that only lasts 1.6.
+  void run_until_timer_ends(float limit_s = 120.0f) {
+    const int frames = static_cast<int>(limit_s / kTick);
+    for (int i = 0; i < frames; ++i) {
+      app.update(kTick, t_);
+      t_ += kTick;
+      if (app.state().timer_left_s <= 0) return;
+    }
+  }
+
+  double now() const { return t_; }
+
   // Hold the knob to open the menu, scroll to a labelled entry, press it.
   void open_menu() { press(0.7f); settle(); }
   void menu_to(const char* label) {
@@ -1086,6 +1110,113 @@ void test_app_menu() {
   }
 }
 
+
+void test_app_flourish() {
+  CASE("the timer reaching zero takes the panel");
+  {
+    AppRig r;
+    // Dial the timer down to one minute so the test does not run for 25.
+    r.enter("TIME");
+    for (int i = 0; i < 40; ++i) r.turn(-1);
+    r.settle();
+    CHECK_EQ(r.app.state().timer_set_min, 1);
+    r.app.handle(Event(EventType::DoublePress), 0.0);
+    r.settle();
+
+    r.tap(1);  // start it
+    CHECK(r.app.state().timer_running);
+    r.run_until_timer_ends();
+    CHECK_EQ(r.app.state().timer_left_s, 0);
+    CHECK(!r.app.state().timer_running);
+    CHECK_EQ(static_cast<int>(r.app.flourish()),
+             static_cast<int>(panel::FlourishKind::Done));
+  }
+
+  CASE("and it clears itself without being touched");
+  {
+    AppRig r;
+    r.enter("TIME");
+    for (int i = 0; i < 40; ++i) r.turn(-1);
+    r.settle();
+    r.app.handle(Event(EventType::DoublePress), 0.0);
+    r.settle();
+    r.tap(1);
+    r.run_until_timer_ends();
+    CHECK_EQ(static_cast<int>(r.app.flourish()),
+             static_cast<int>(panel::FlourishKind::Done));
+    r.run(panel::kDoneSeconds + 0.2f);
+    CHECK_EQ(static_cast<int>(r.app.flourish()),
+             static_cast<int>(panel::FlourishKind::None));
+  }
+
+  CASE("a celebration can be got out of");
+  {
+    // A moment you have to sit through is an obstacle, not a flourish.
+    AppRig r;
+    r.enter("TIME");
+    for (int i = 0; i < 40; ++i) r.turn(-1);
+    r.settle();
+    r.app.handle(Event(EventType::DoublePress), 0.0);
+    r.settle();
+    r.tap(1);
+    r.run_until_timer_ends();
+    CHECK_EQ(static_cast<int>(r.app.flourish()),
+             static_cast<int>(panel::FlourishKind::Done));
+    r.tap(2);
+    CHECK_EQ(static_cast<int>(r.app.flourish()),
+             static_cast<int>(panel::FlourishKind::None));
+  }
+
+  CASE("press-and-turn shows what it is changing");
+  {
+    // The gesture works from any screen, so without a readout it changes
+    // something you cannot see it changing.
+    AppRig r;
+    r.tap(2);
+    r.settle();  // the clock, which has no brightness of its own on screen
+    r.ports.raw.encoder_sw = true;
+    r.run(0.05f);
+    r.turn(3);
+    r.ports.raw.encoder_sw = false;
+    r.run(0.05f);
+    CHECK_EQ(static_cast<int>(r.app.flourish()),
+             static_cast<int>(panel::FlourishKind::Bar));
+    r.run(panel::kBarSeconds + 0.2f);
+    CHECK_EQ(static_cast<int>(r.app.flourish()),
+             static_cast<int>(panel::FlourishKind::None));
+  }
+
+  CASE("a stopped timer says it can be started");
+  {
+    // The one piece of motion on that screen that is about what you could do
+    // rather than what is happening.
+    AppRig r;
+    r.tap(2); r.settle();
+    r.tap(2); r.settle();  // to the timer
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Timer));
+    CHECK(!r.app.state().timer_running);
+
+    // Rows 1..5 in the first three columns: where the arrow lives. Row 7 is
+    // the progress rail, which reaches column 0 whatever the timer is doing.
+    auto arrow_ink = [](const panel::Framebuffer& f) {
+      int n = 0;
+      for (int y = 1; y <= 5; ++y)
+        for (int x = 0; x < 3; ++x)
+          if (f.get(x, y).lit()) ++n;
+      return n;
+    };
+
+    panel::Framebuffer stopped, running;
+    r.render(stopped);
+    CHECK(arrow_ink(stopped) > 0);
+
+    r.tap(1);  // start it
+    r.settle();
+    r.render(running);
+    CHECK_EQ(arrow_ink(running), 0);  // and gone once it is running
+  }
+}
+
 void test_nav_inverse() {
   CASE("every transition that has a direction knows how to come back");
   {
@@ -1118,6 +1249,7 @@ void run_ui_tests() {
   test_app_timer();
   test_app_menu();
   test_app_adjust();
+  test_app_flourish();
   test_app_sleep_and_settings();
   test_nav_inverse();
 }

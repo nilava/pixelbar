@@ -111,6 +111,9 @@ void App::update(float dt_s, double now_s) {
     ui_.wifi_connected = ports_->wifi_connected();
   }
 
+  mgr_.advance(dt_s);
+  fl_.tick(now_s);
+
   // Leave the boot screen once it has been seen. A connected radio ends it
   // early, because at that point it has nothing left to tell you.
   if (booting_) {
@@ -132,7 +135,10 @@ void App::update(float dt_s, double now_s) {
       timer_accum_s_ -= 1.0f;
       --ui_.timer_left_s;
     }
-    if (ui_.timer_left_s <= 0) ui_.timer_running = false;
+    if (ui_.timer_left_s <= 0) {
+      ui_.timer_running = false;
+      fl_.done(ui_.accent, "DONE", now_s);
+    }
   }
 
   // Idle, and the sleep timeout.
@@ -155,7 +161,15 @@ void App::update(float dt_s, double now_s) {
 }
 
 void App::render(panel::Framebuffer& fb, const panel::Anim& a) {
-  mgr_.render(fb, ui_, a);
+  // Skip the screen underneath while the flourish covers the panel: it would
+  // be drawn and then entirely painted over, and this is the one moment the
+  // frame budget is under any real pressure.
+  if (fl_.opaque(a.t)) {
+    fb.clear();
+  } else {
+    mgr_.render(fb, ui_, a);
+  }
+  fl_.draw(fb, a);
 }
 
 void App::note_change() {
@@ -340,6 +354,10 @@ void App::handle(const Event& e, double now_s) {
   // that woke it is swallowed, so you never change your status by reaching for
   // a sleeping device.
   idle_s_ = 0.0f;
+  // A celebration you cannot get out of is an obstacle. Any deliberate input
+  // ends it, and is then acted on normally — unlike waking from sleep, where
+  // the gesture is swallowed, because here you can see what you are doing.
+  if (fl_.kind() == panel::FlourishKind::Done && fl_.active(now_s)) fl_.cancel();
   if (booting_) {
     // Touching it during the splash ends the splash and nothing else: you
     // should not be able to change your status by accident while it wakes up.
@@ -420,6 +438,9 @@ void App::handle(const Event& e, double now_s) {
       if (v < 4) v = 4;
       if (v > 255) v = 255;
       ui_.brightness = static_cast<uint8_t>(v);
+      // Without this the gesture changes something you cannot see it changing,
+      // on whatever screen you happen to be on.
+      fl_.bar(ui_.accent, ui_.brightness / 255.0f, now_s);
       note_change();
       break;
     }

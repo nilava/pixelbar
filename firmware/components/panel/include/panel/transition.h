@@ -77,6 +77,14 @@ class ScreenManager {
 
   static TransitionKind kind_for(Screen from, Screen to);
 
+  // Advancing and drawing are separate because time has to move in one place.
+  //
+  // When render() also advanced the clock, a transition only progressed if
+  // something drew it — so a model that updated faster than the display, or
+  // that asked whether it was still busy without rendering, got a frozen
+  // transition and a busy() that never went false. advance() belongs with the
+  // rest of the model's tick; render() is a pure function of where it got to.
+  void advance(float dt_s);
   void render(Framebuffer& out, const UiState& ui, const Anim& a);
 
   bool busy() const { return kind_ != TransitionKind::None; }

@@ -96,12 +96,21 @@ void ScreenManager::restart_with(const UiState& leaving, TransitionKind k,
   to_anim_ = ScreenAnim{};
 }
 
+void ScreenManager::advance(float dt_s) {
+  if (kind_ == TransitionKind::None) return;
+  elapsed_ += dt_s;
+  if (progress() >= 1.0f) {
+    kind_ = TransitionKind::None;
+    from_ = to_;
+    from_anim_ = to_anim_;
+  }
+}
+
 void ScreenManager::render(Framebuffer& out, const UiState& ui, const Anim& a) {
   if (kind_ == TransitionKind::None) {
     draw_screen(out, to_, ui, a, to_anim_);
     return;
   }
-  elapsed_ += a.dt;
   const float p = progress();
 
   // Both sides get the live clock, so neither freezes while the other moves.
@@ -110,12 +119,6 @@ void ScreenManager::render(Framebuffer& out, const UiState& ui, const Anim& a) {
   draw_screen(from_fb_, from_, from_ui_, a, from_anim_);
   draw_screen(to_fb_, to_, ui, a, to_anim_);
   compose(out, from_fb_, to_fb_, kind_, p, status_color(ui.status));
-
-  if (p >= 1.0f) {
-    kind_ = TransitionKind::None;
-    from_ = to_;
-    from_anim_ = to_anim_;
-  }
 }
 
 void compose(Framebuffer& out, const Framebuffer& from, const Framebuffer& to,

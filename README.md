@@ -120,6 +120,15 @@ The motion is semantic: it tells you what kind of move just happened.
 | A status change | The new colour bursts out of the icon and is drawn back into it |
 | Sleeping or waking | Fades through black |
 
+The timer finishing is the moment the device exists for, so it takes the whole
+panel: one frame of white, a quarter-second settle into the status colour with
+the tick drawing itself on, about a second held with a highlight crossing, then
+a fade that *uncovers* what was underneath rather than painting over it. Any
+input gets you out of it — a celebration you have to sit through is an
+obstacle.
+
+![done](docs/anim/flourish-done.gif)
+
 Nothing slides. The panel is read as a radial strip of a disk — column 0 at the
 hub, column 23 at the rim — so content printed on it advances through the same
 *angle* at every radius and therefore a different *distance*. The rim end whips

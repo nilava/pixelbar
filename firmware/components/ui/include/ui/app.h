@@ -12,6 +12,7 @@
 #pragma once
 #include <cstdint>
 
+#include "panel/flourish.h"
 #include "panel/screens.h"
 #include "panel/transition.h"
 #include "ui/gesture.h"
@@ -68,6 +69,7 @@ class App {
   int depth() const { return depth_; }
   bool asleep() const { return asleep_; }
   bool busy() const { return mgr_.busy(); }
+  panel::FlourishKind flourish() const { return fl_.kind(); }
 
   // The last event the model acted on, for the simulator's status line.
   EventType last_event() const { return last_; }
@@ -94,6 +96,10 @@ class App {
   Settings set_;
   panel::UiState ui_;
   panel::ScreenManager mgr_;
+  // Not on the nav stack: a flourish draws over whatever is there and leaves
+  // the panel exactly where it was, so a timer finishing mid-menu does not
+  // lose your place.
+  panel::Flourish fl_;
 
   NavFrame nav_[kNavDepth];
   int depth_ = 1;

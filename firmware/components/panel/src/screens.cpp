@@ -48,6 +48,25 @@ RGB status_color(Status s) {
 
 namespace {
 
+// A play triangle, three columns by five rows. Small because the time face
+// already owns columns 3 to 19, and there is exactly this much either side.
+const uint8_t kPlayRows[5] = {0b100, 0b110, 0b111, 0b110, 0b100};
+
+// The "press me" affordance, inflating and deflating where it stands.
+//
+// Copied from frame-stepping the real thing, where the arrow beside a stopped
+// timer grows wider and brighter and then contracts on about a 0.7 s cycle. It
+// is the one piece of motion on the screen that is about what you could do
+// rather than about what is happening, and a stopped timer without it just
+// looks like a stopped clock.
+void draw_play_hint(Framebuffer& fb, const Anim& a, RGB c) {
+  const Sprite play{kPlayRows, 3, 5, 2};
+  const float k = a.wave(0.7f);
+  const float sx = 0.55f + 0.45f * k;          // it inflates toward the face
+  const float bright = 0.45f + 0.55f * k;
+  draw_sprite_scaled(fb, play, 1.5f, 3.5f, sx, 1.0f, c, bright);
+}
+
 // A sheen that crosses the label area now and then: enough motion to read as
 // alive from across a room, not enough to pull your eye off a monitor.
 void sheen(Framebuffer& fb, const Anim& a, int row, int x0, int x1, RGB c, float period_s) {
@@ -354,6 +373,7 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       draw_bar_aa(fb, kHeight - 1, kHeight - 1, shown, c.scaled(120), RGB(0, 0, 0));
       // A brighter head on the bar, so progress reads even when it barely moves.
       fb.set_aa(shown * kWidth - 0.5f, kHeight - 1, c, 0.8f, Blend::Add);
+      if (!ui.timer_running && left > 0) draw_play_hint(fb, a, ui.accent);
       break;
     }
 

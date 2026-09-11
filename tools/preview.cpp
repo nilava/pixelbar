@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "panel/config.h"
+#include "panel/flourish.h"
 #include "panel/framebuffer.h"
 #include "panel/patterns.h"
 #include "panel/renderer.h"
@@ -290,6 +291,8 @@ struct Clip {
   // Walk a list screen, one entry every `scroll_every` seconds, with the disk
   // transition the real thing uses.
   float scroll_every = 0.0f;
+  // Fire the completion flourish at this moment, over whatever is showing.
+  float done_at = -1.0f;
 };
 
 void render_clip(const Clip& c, const std::string& dir) {
@@ -324,6 +327,8 @@ void render_clip(const Clip& c, const std::string& dir) {
   FrameClock clock;
   micros_t t = 0;
   bool fired = false;
+  bool done_fired = false;
+  Flourish fl;
   float next_scroll = c.scroll_every;
   for (int i = 0; i < frames; ++i) {
     const float secs = static_cast<float>(i) / kAnimFps;
@@ -362,7 +367,18 @@ void render_clip(const Clip& c, const std::string& dir) {
     if (ui.hue > 1.0f) ui.hue -= 1.0f;
 
     const Anim a = clock.tick(t);
-    mgr.render(fb, ui, a);
+    if (!done_fired && c.done_at >= 0.0f && secs >= c.done_at) {
+      done_fired = true;
+      fl.done(status_color(ui.status), "DONE", a.t);
+    }
+    mgr.advance(a.dt);
+    fl.tick(a.t);
+    if (fl.opaque(a.t)) {
+      fb.clear();
+    } else {
+      mgr.render(fb, ui, a);
+    }
+    fl.draw(fb, a);
     ren.render(fb, grb, kPreviewBrightness, kMaxMilliamps, kWiring);
 
     Image img(fw, fh);
@@ -413,6 +429,10 @@ void render_all_clips(const std::string& dir) {
       {"sleep", Screen::Sleep, Status::Free, 4.0f},
       {"booting", Screen::Booting, Status::Free, 3.0f},
       {"trans-disk", Screen::Status, Status::Busy, 2.2f, Screen::Clock, 0.6f},
+      // The timer finishing: a flash, a field, the word held, then a fade that
+      // uncovers the screen rather than painting over it.
+      {"flourish-done", Screen::Timer, Status::Busy, 3.2f, Screen::Count, -1.0f,
+       TransitionKind::None, Status::Count, 0.0f, 0.7f},
       {"trans-wipe", Screen::Timer, Status::Busy, 2.0f, Screen::Brightness, 0.6f},
       {"trans-fade", Screen::Status, Status::Busy, 2.5f, Screen::Sleep, 0.7f},
       // A status change with no screen transition at all: the icon and the word

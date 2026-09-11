@@ -8,6 +8,7 @@
 #include <set>
 
 #include "panel/config.h"
+#include "panel/flourish.h"
 #include "panel/font.h"
 #include "panel/framebuffer.h"
 #include "panel/patterns.h"
@@ -1165,6 +1166,141 @@ static void test_status_swap() {
   CHECK_EQ(diff, 0);
 }
 
+
+static void test_flourish() {
+  CASE("done runs flash, settle, hold, fade, and then stops");
+  {
+    Flourish f;
+    Framebuffer fb;
+    Anim a;
+    a.dt = 0.01f;
+    f.done(RGB(255, 40, 20), "DONE", 0.0);
+
+    a.t = 0.0;
+    fb.clear();
+    f.draw(fb, a);
+    const RGB flash = fb.get(23, 0);
+    CHECK(flash.r == flash.g && flash.g == flash.b);  // the flash is white
+    CHECK(flash.r > 100);
+    CHECK_EQ(lit_count(fb), kNumLeds);                // and covers everything
+
+    a.t = 0.6;  // held
+    fb.clear();
+    f.draw(fb, a);
+    const RGB held = fb.get(23, 0);
+    CHECK(held.r > held.g && held.r > held.b);        // settled on the colour
+    CHECK(f.opaque(0.6));
+
+    a.t = kDoneSeconds + 0.01;
+    fb.clear();
+    f.draw(fb, a);
+    CHECK_EQ(lit_count(fb), 0);                       // nothing left behind
+    CHECK(!f.active(a.t));
+    CHECK_EQ(static_cast<int>(f.kind()), static_cast<int>(FlourishKind::None));
+  }
+
+  CASE("the fade uncovers what was underneath rather than painting it black");
+  {
+    // Filling toward black would end the moment on a hard cut from an empty
+    // panel to a lit one, which is most of what the fade is for.
+    Flourish f;
+    Framebuffer fb;
+    Anim a;
+    a.dt = 0.01f;
+    f.done(RGB(255, 40, 20), "DONE", 0.0);
+    bool saw_underneath = false;
+    for (double t = kDoneHoldS; t < kDoneSeconds; t += 0.02) {
+      fb.fill(RGB(0, 0, 90));  // a blue screen "underneath"
+      a.t = t;
+      f.draw(fb, a);
+      if (fb.get(12, 4).b > 20) saw_underneath = true;
+    }
+    CHECK(saw_underneath);
+  }
+
+  CASE("the flash is the brightest frame the UI draws, and still fits the budget");
+  {
+    // 192 LEDs of white. It is held below full value on purpose: the power cap
+    // would otherwise scale this one frame and nothing else, which turns a
+    // deliberate flash into a shrug.
+    Flourish f;
+    Framebuffer fb;
+    Anim a;
+    a.dt = 0.01f;
+    f.done(RGB(255, 255, 255), "DONE", 0.0);
+    float peak = 0.0f;
+    for (double t = 0.0; t < kDoneSeconds; t += 0.01) {
+      fb.clear();
+      a.t = t;
+      f.draw(fb, a);
+      const float ma = fb.estimate_ma(255);
+      if (ma > peak) peak = ma;
+    }
+    CHECK(peak < kMaxMilliamps);
+  }
+
+  CASE("a toast dims the screen under it instead of replacing it");
+  {
+    Flourish f;
+    Framebuffer fb;
+    Anim a;
+    a.dt = 0.01f;
+    f.toast(RGB(0, 210, 70), "OK", &kIconFree, 0.0);
+    fb.fill(RGB(0, 0, 200));
+    a.t = kToastSeconds * 0.5;
+    f.draw(fb, a);
+    // Somewhere away from the toast the blue is still there, only dimmer.
+    const RGB under = fb.get(kWidth - 1, kHeight - 1);
+    CHECK(under.b > 0);
+    CHECK(under.b < 200);
+    CHECK(!f.opaque(a.t));
+  }
+
+  CASE("re-arming a bar refreshes it instead of replaying its entrance");
+  {
+    // A knob turned steadily would otherwise restart the animation on every
+    // detent and never settle into anything you could read.
+    Flourish f;
+    Framebuffer fb;
+    Anim a;
+    a.dt = 0.01f;
+    // The refresh times are stepped explicitly rather than accumulated: adding
+    // 0.05 ten times lands a hair either side of 0.5, and landing just under it
+    // put the draw a nanosecond after the last refresh, at the very first frame
+    // of the entrance, where the bar is legitimately still black.
+    double last = 0.0;
+    f.bar(RGB(255, 138, 31), 0.2f, 0.0);
+    for (int i = 1; i <= 10; ++i) {
+      last = i * 0.05;
+      f.bar(RGB(255, 138, 31), 0.5f, last);
+    }
+    a.t = last + 0.2;
+    fb.clear();
+    f.draw(fb, a);
+    // Half a second of turning, and the bar is fully present rather than
+    // stuck at the first frame of its entrance.
+    int lit_row = 0;
+    for (int x = 0; x < kWidth; ++x)
+      if (fb.get(x, 7).lit()) ++lit_row;
+    CHECK(lit_row > kWidth / 3);
+    CHECK(f.active(a.t));
+    CHECK(!f.active(last + kBarSeconds + 0.01));
+  }
+
+  CASE("a flourish that was never started draws nothing");
+  {
+    Flourish f;
+    Framebuffer fb;
+    Anim a;
+    a.t = 5.0;
+    fb.clear();
+    f.draw(fb, a);
+    CHECK_EQ(lit_count(fb), 0);
+    CHECK(!f.active(5.0));
+    CHECK(!f.opaque(5.0));
+  }
+}
+
 static void test_digit_roll() {
   CASE("a roll stays inside its own five-row band");
   Framebuffer fb;
@@ -1343,6 +1479,7 @@ static void test_transitions() {
   const int frames = static_cast<int>(transition_seconds(TransitionKind::DiskUp) * 100.0f) + 8;
   for (int i = 0; i < frames; ++i) {
     step.t = 1.0 + i * 0.01;
+    m.advance(step.dt);
     m.render(out, ui, step);
     CHECK(m.progress() >= last);
     last = m.progress();
@@ -1441,6 +1578,7 @@ int main() {
   test_icons();
   test_sprite();
   test_status_swap();
+  test_flourish();
   test_digit_roll();
   test_transitions();
   test_dither();
