@@ -54,24 +54,32 @@ RenderStats Renderer::render(const Framebuffer& fb, uint8_t* out_grb, uint8_t br
       const int dst = led_index(x, y, w) * 3;
       // WS2812B takes green first.
       const int order[3] = {src + 1, src + 0, src + 2};
+      // One jitter value for the whole pixel, not one per channel.
+      //
+      // Independent jitter lets the three channels cross the threshold on
+      // different frames, so a warm orange spends some frames as red, some as
+      // red and green, and never as itself — which is seen as the colour
+      // wandering rather than as noise. Sharing it makes them rise and fall
+      // together, so whatever the pixel does it stays the right hue while
+      // doing it.
+      const int32_t jitter = dither_ ? static_cast<int32_t>(next_rand() & 0xFF) : 0;
       for (int c = 0; c < 3; ++c) {
         // Exact value in 1/256ths of an output step.
         const int32_t exact = (static_cast<int32_t>(gam[order[c]]) * k) >> 8;
         int32_t v = exact;
         int32_t out;
-        if (dither_ && exact < kDitherMinStep) {
-          // Too dim to dither without being seen, and off means off.
+        if (dither_ && exact < kDitherKnee) {
+          // Off means off, and so is anything too dim to show steadily.
           //
-          // Two things at once. A pixel asked for black must be black: one that
-          // went dark carrying a positive error would otherwise be pushed over
-          // the threshold by the jitter and light for a frame, which across an
-          // animating panel is a constant sparkle of LEDs that were asked to be
-          // off. And a pixel asked for a twentieth of a step cannot be given one
-          // at 100 fps without the pulses being far enough apart to count.
+          // A pixel that goes dark carrying a positive error would otherwise be
+          // pushed over the threshold by the jitter and light for a frame,
+          // which across an animating panel is a constant sparkle of LEDs that
+          // were asked to be black. Clearing the error matters as much as
+          // forcing the output: a residue left behind fires later, on a pixel
+          // that has since been asked for nothing at all.
           //
-          // Clearing the error matters as much as forcing the output. A residue
-          // left behind fires later, on a pixel that has since been asked for
-          // nothing at all.
+          // The threshold is the rate below which pulses stop fusing. See
+          // kDitherKnee for why it is a cutoff and not a gentle roll-off.
           out = 0;
           err_[dst + c] = 0;
         } else if (dither_) {
@@ -89,7 +97,6 @@ RenderStats Renderer::render(const Framebuffer& fb, uint8_t* out_grb, uint8_t br
           // The error feedback is computed from the *unjittered* value, so the
           // accumulator still converges on the exact average — the noise moves
           // when a pulse happens, never how many.
-          const int32_t jitter = static_cast<int32_t>(next_rand() & 0xFF);
           out = (v + jitter) >> 8;
           if (out < 0) out = 0;
           if (out > 255) out = 255;

@@ -152,7 +152,8 @@ extern "C" void app_main(void) {
       // and that is far easier to see in a log line than on the panel.
       ESP_LOGI(TAG,
                "fps=%.1f avg=%.2fms max=%.2fms power=%.0f%% screen=%s "
-               "detents=%ld illegal=%lu  pads=%c%c%c enc A=%d B=%d sw=%d %s",
+               "detents=%ld illegal=%lu  pads=%c%c%c enc A=%d B=%d sw=%d %s "
+               "bright=%d(%d%%)",
                meter.fps(), meter.frame_ms_avg(), meter.frame_ms_max(),
                st.power_scale * 100.0f, panel::screen_name(app.screen()),
                static_cast<long>(ports.encoder_detents()),
@@ -163,7 +164,8 @@ extern "C" void app_main(void) {
                (ports.raw_encoder() & 1) ? 1 : 0,
                (ports.raw_encoder() & 2) ? 1 : 0,
                (ports.raw_encoder() & 4) ? 1 : 0,
-               panel::status_label(app.state().status));
+               panel::status_label(app.state().status), app.state().brightness,
+               (app.state().brightness * 100 + 127) / 255);
       if (kPinScan) {
         char scan[192];
         board::scan_report(scan, sizeof(scan));

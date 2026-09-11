@@ -16,19 +16,28 @@ struct RenderStats {
   float est_ma = 0.0f;
 };
 
-// The dimmest value temporal dithering can carry without being seen.
+// Where dithering stops being a dimmer and starts being a flashing light.
 //
 // Dithering renders a fraction of an output step by firing that fraction of
-// frames. The pulses have to be close enough together to fuse: a value of
-// 12/256 fires once every 21 frames, which at 100 fps is a 4.7 Hz blink and is
-// not a compromise, it is a flashing light. Below about 30 Hz there is nothing
-// to be done about that at one bit and one hundred frames a second — jitter
-// spreads the frequency but the pulses are still sparse and separate.
+// frames, so the pulse rate *is* the value. A channel at 6/256 fires once every
+// 43 frames — 2.3 Hz — and no amount of jitter helps, because the pulses are
+// sparse and separate rather than tonal. This is what made the accent colour
+// appear to drift: gamma turns its blue component into 1 of 255, so at a low
+// brightness blue fired alone every fiftieth frame on a pixel that should have
+// been steady orange.
 //
-// So below this, values round down instead. It costs the dimmest sliver of the
-// range at very low brightness, where there is almost no detail to lose, and it
-// buys a panel that sits still.
-constexpr int32_t kDitherMinStep = 256 * 30 / kFramesPerSecond;
+// Below this rate a channel is taken to zero, not reduced.
+//
+// A smooth roll-off was tried and is worse: reducing the average without
+// reaching zero only makes the pulses rarer, and a rarer pulse is a more
+// noticeable one. Measured, the roll-off turned a 4.7 Hz blink into a 0.4 Hz
+// one. There is no smooth middle here — any average below the fuse rate
+// produces visible pulses — so the only two honest values are zero and enough.
+//
+// The cost is a step at the very bottom of a fade, where a barely-visible pixel
+// becomes an off one. That is a single edge in a place nothing much is
+// happening, and it is a better trade than a light that blinks.
+constexpr int32_t kDitherKnee = 256 * 30 / kFramesPerSecond;
 
 class Renderer {
  public:
