@@ -5,6 +5,7 @@
 // interesting lives above this file, in two components that know nothing about
 // ESP-IDF and are tested on a laptop.
 #include <cstdio>
+#include <cstring>
 
 #include "esp_log.h"
 #include "esp_timer.h"
