@@ -410,16 +410,20 @@ void test_encoder() {
 
   CASE("a press fires on release, and doubles like a tap");
   {
+    // The release is acted on once it has settled, so it lands a frame or two
+    // after the contact opens rather than on the same one. Fifteen
+    // milliseconds is not something a finger can feel, and it is what stops the
+    // rotary contacts' ground bounce from being read as a click.
     Rig r;
     r.sw(true);
     r.hold_for(0.05f);
     r.sw(false);
-    r.step();
+    r.hold_for(0.03f);
     CHECK_EQ(r.count(EventType::Press), 1);
     r.sw(true);
     r.hold_for(0.05f);
     r.sw(false);
-    r.step();
+    r.hold_for(0.03f);
     CHECK_EQ(r.count(EventType::DoublePress), 1);
     CHECK_EQ(r.count(EventType::Press), 1);
   }
@@ -432,24 +436,26 @@ void test_encoder() {
     CHECK_EQ(r.count(EventType::PressHoldBegin), 1);
     CHECK_EQ(r.count(EventType::Press), 0);
     r.sw(false);
-    r.step();
+    r.hold_for(0.03f);
     CHECK_EQ(r.count(EventType::PressHoldEnd), 1);
     CHECK_EQ(r.count(EventType::Press), 0);
   }
 
-  CASE("turning while the knob is down is a modifier, and not a press");
+  CASE("turning while the knob is held is just a turn, and does not click");
   {
+    // There is no press-and-turn gesture. It duplicated a path the menu already
+    // provides, and on this hardware the push switch shares its ground with the
+    // rotary contacts, so an ordinary turn kept being read as the modifier.
     Rig r;
     r.sw(true);
-    r.hold_for(0.05f);
+    r.hold_for(0.15f);
     r.turn(2);
     r.step();
-    CHECK_EQ(r.count(EventType::PressTurn), 1);
-    CHECK_EQ(r.count(EventType::Turn), 0);
+    CHECK_EQ(r.count(EventType::Turn), 1);
     r.sw(false);
-    r.step();
-    // Releasing after a press-turn must not also fire a press, or every
-    // brightness adjustment would end by activating whatever the press does.
+    r.hold_for(0.03f);
+    // Releasing after a turn must not also click, or every adjustment would
+    // end by activating whatever the press does.
     CHECK_EQ(r.count(EventType::Press), 0);
     CHECK_EQ(r.count(EventType::PressHoldBegin), 0);
   }
@@ -472,6 +478,71 @@ void test_encoder() {
     for (const Event& e : slow.got())
       if (e.type == EventType::Turn && e.velocity > slow_peak) slow_peak = e.velocity;
     CHECK(fast_peak > slow_peak * 2.0f);
+  }
+}
+
+
+void test_switch_noise() {
+  CASE("a glitch on the switch while turning is not a press-and-turn");
+  {
+    // The bug this pins, seen on the first board: on a KY-040 the push switch
+    // shares its ground net with the rotary contacts, so turning the knob
+    // bounces that ground and the switch line dips with it. Untreated, every
+    // ordinary turn also adjusted the brightness, and the panel fought between
+    // changing screen and changing value.
+    Rig r;
+    for (int i = 0; i < 20; ++i) {
+      r.sw(true);       // a one-frame dip, exactly what ground bounce looks like
+      r.turn(1);
+      r.step();
+      r.sw(false);
+      r.step();
+      r.step();
+    }
+    CHECK_EQ(r.count(EventType::PressTurn), 0);
+    CHECK_EQ(r.count(EventType::Turn), 20);  // every turn still counted, once
+  }
+
+  CASE("and it is not a press either");
+  {
+    Rig r;
+    for (int i = 0; i < 20; ++i) {
+      r.sw(true);
+      r.step();
+      r.sw(false);
+      r.step();
+      r.step();
+    }
+    CHECK_EQ(r.count(EventType::Press), 0);
+    CHECK_EQ(r.count(EventType::DoublePress), 0);
+    CHECK_EQ(r.count(EventType::PressHoldBegin), 0);
+  }
+
+  CASE("a deliberate press still registers, and is not slowed much by the filter");
+  {
+    Rig r;
+    r.sw(true);
+    r.hold_for(0.06f);  // a short but real press
+    r.sw(false);
+    r.hold_for(0.05f);
+    CHECK_EQ(r.count(EventType::Press), 1);
+  }
+
+  CASE("a glitch never produces a turn that was not there");
+  {
+    // The switch dipping is not supposed to add, remove or alter turns. This
+    // is the other half of the same bug: whatever the switch line does, the
+    // count of turns has to match the count of detents.
+    Rig r;
+    for (int i = 0; i < 12; ++i) {
+      r.sw(i % 2 == 0);
+      r.turn(1);
+      r.step();
+    }
+    int total = 0;
+    for (const Event& e : r.got())
+      if (e.type == EventType::Turn) total += e.delta;
+    CHECK_EQ(total, 12);
   }
 }
 
@@ -845,29 +916,64 @@ void test_app_timer() {
 }
 
 void test_app_adjust() {
-  CASE("holding the knob opens the menu; DISP leads to the adjusters");
+  CASE("press goes in and hold goes out, at every level");
   {
+    // One rule the whole way down, so there is always a way back that does not
+    // depend on remembering how deep you are.
     AppRig r;
     CHECK_EQ(r.app.depth(), 1);
     r.open_menu();
     CHECK_EQ(r.app.depth(), 2);
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Menu));
-    r.menu_to("DISP");
+
+    r.menu_to("DIM");
     r.press(); r.settle();
+    CHECK_EQ(r.app.depth(), 3);
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Brightness));
+
+    // Pressing accepts and returns to the menu you came from, rather than
+    // stepping on to some unrelated setting.
     r.press(); r.settle();
-    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::ColorPick));
-    r.press(); r.settle();
-    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::TimerSet));
-    r.press(); r.settle();  // out the far end
+    CHECK_EQ(r.app.depth(), 2);
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Menu));
+
+    // And holding backs out of the menu the same way it opened it.
+    r.press(0.7f); r.settle();
     CHECK_EQ(r.app.depth(), 1);
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
+  }
+
+  CASE("every menu entry goes to exactly one place");
+  {
+    const struct { const char* label; panel::Screen screen; } kWant[] = {
+        {"STAT", panel::Screen::StatusPick},
+        {"TIME", panel::Screen::TimerSet},
+        {"DIM", panel::Screen::Brightness},
+        {"HUE", panel::Screen::ColorPick},
+    };
+    for (const auto& w : kWant) {
+      AppRig r;
+      r.enter(w.label);
+      CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(w.screen));
+      r.press();
+      r.settle();
+      if (w.screen == panel::Screen::StatusPick) {
+        // The one deliberate exception. Pressing here does not accept a setting
+        // and step back, it *claims a status* — and the result of that is the
+        // room-facing screen, so showing you the menu again would be hiding the
+        // thing you just did.
+        CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
+        CHECK_EQ(r.app.depth(), 1);
+      } else {
+        CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Menu));
+      }
+    }
   }
 
   CASE("turning on the brightness screen changes brightness, and clamps");
   {
     AppRig r;
-    r.enter("DISP");
+    r.enter("DIM");
     const int before = r.app.state().brightness;
     r.turn(5); r.settle();
     CHECK(r.app.state().brightness > before);
@@ -880,8 +986,7 @@ void test_app_adjust() {
   CASE("the colour picker commits its hue to the accent");
   {
     AppRig r;
-    r.enter("DISP");
-    r.press(); r.settle();  // the knob steps on from brightness to colour
+    r.enter("HUE");
     const panel::RGB before = r.app.state().accent;
     r.turn(6); r.settle();
     const panel::RGB after = r.app.state().accent;
@@ -892,7 +997,7 @@ void test_app_adjust() {
   CASE("a shake backs out of an adjuster but does nothing at home");
   {
     AppRig r;
-    r.enter("DISP");
+    r.enter("DIM");
     CHECK(r.app.depth() > 1);
     r.app.handle(Event(EventType::Shake), 0.0);
     r.settle();
@@ -903,18 +1008,27 @@ void test_app_adjust() {
     CHECK_EQ(static_cast<int>(r.app.screen()), screen_before);
   }
 
-  CASE("press-and-turn changes brightness without leaving the screen");
+  CASE("brightness is reached through the menu and by no shortcut");
   {
+    // Deliberately the only way in. A modifier gesture that adjusted it from
+    // anywhere competed with ordinary turning for the same movement, and on
+    // this hardware it lost: the push switch shares its ground with the rotary
+    // contacts, so turning dipped the switch line and every turn was read as
+    // the modifier.
     AppRig r;
     r.tap(2); r.settle();  // the clock
     const int before = r.app.state().brightness;
     r.ports.raw.encoder_sw = true;
-    r.run(0.05f);
+    r.run(0.15f);
     r.turn(4);
     r.ports.raw.encoder_sw = false;
     r.settle();
-    CHECK(r.app.state().brightness > before);
-    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Clock));
+    CHECK_EQ(r.app.state().brightness, before);  // nothing happened to it
+
+    r.enter("DIM");
+    r.turn(4);
+    r.settle();
+    CHECK(r.app.state().brightness > before);  // and here it does
   }
 }
 
@@ -957,7 +1071,7 @@ void test_app_sleep_and_settings() {
   CASE("settings are written once a knob stops moving, not once per detent");
   {
     AppRig r;
-    r.enter("DISP");
+    r.enter("DIM");
     r.ports.saves = 0;
     for (int i = 0; i < 20; ++i) r.turn(1);  // a sweep
     CHECK_EQ(r.ports.saves, 0);              // nothing yet
@@ -970,7 +1084,7 @@ void test_app_sleep_and_settings() {
   CASE("what was saved comes back on the next boot");
   {
     AppRig r;
-    r.enter("DISP");
+    r.enter("DIM");
     for (int i = 0; i < 10; ++i) r.turn(1);
     r.run(2.0f);
     const int saved = r.app.state().brightness;
@@ -1094,20 +1208,6 @@ void test_app_menu() {
     for (int i = 0; i < static_cast<int>(panel::Status::Count); ++i) CHECK(seen[i]);
   }
 
-  CASE("a menu entry with nothing behind it still acknowledges");
-  {
-    // Silence reads as a button that did not work, so the unfinished entry
-    // plays the claim animation rather than doing nothing at all.
-    AppRig r;
-    r.open_menu();
-    r.menu_to("SYS");
-    const int depth_before = r.app.depth();
-    r.press();
-    r.run(0.1f);
-    CHECK(r.app.busy());  // something is animating
-    r.settle();
-    CHECK_EQ(r.app.depth(), depth_before);
-  }
 }
 
 
@@ -1167,23 +1267,27 @@ void test_app_flourish() {
              static_cast<int>(panel::FlourishKind::None));
   }
 
-  CASE("press-and-turn shows what it is changing");
+  CASE("a fast turn moves a list by its detents, not by one per frame");
   {
-    // The gesture works from any screen, so without a readout it changes
-    // something you cannot see it changing.
+    // Spinning three clicks should land three entries on, in one movement.
+    // Applying one step per frame instead started and abandoned a transition
+    // every ten milliseconds, which is what made a fast turn feel like the
+    // panel was fighting itself.
     AppRig r;
-    r.tap(2);
-    r.settle();  // the clock, which has no brightness of its own on screen
-    r.ports.raw.encoder_sw = true;
-    r.run(0.05f);
+    r.open_menu();
+    CHECK_EQ(r.app.state().menu_index, 0);
     r.turn(3);
-    r.ports.raw.encoder_sw = false;
-    r.run(0.05f);
-    CHECK_EQ(static_cast<int>(r.app.flourish()),
-             static_cast<int>(panel::FlourishKind::Bar));
-    r.run(panel::kBarSeconds + 0.2f);
-    CHECK_EQ(static_cast<int>(r.app.flourish()),
-             static_cast<int>(panel::FlourishKind::None));
+    r.settle();
+    CHECK_EQ(r.app.state().menu_index, 3 % panel::kMenuCount);
+  }
+
+  CASE("and a fast turn on the carousel does not skip past where you aimed");
+  {
+    AppRig r;
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
+    r.turn(2);
+    r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Timer));
   }
 
   CASE("a stopped timer says it can be started");
@@ -1242,6 +1346,7 @@ void run_ui_tests() {
   test_chord_and_swipe();
   test_chord_is_not_a_swipe();
   test_encoder();
+  test_switch_noise();
   test_motion();
   test_no_crosstalk();
   test_app_boot_and_views();

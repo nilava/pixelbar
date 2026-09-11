@@ -70,6 +70,7 @@ extern const Icon kIconCross;
 extern const Icon kIconWarning;
 extern const Icon kIconDownload;
 extern const Icon kIconInfo;
+extern const Icon kIconPalette;
 extern const AnimIcon kAnimWifi;   // arcs filling
 extern const StrokeIcon kStrokeCheck;
 

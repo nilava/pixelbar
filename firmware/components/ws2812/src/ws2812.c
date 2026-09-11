@@ -1,5 +1,7 @@
 #include "ws2812.h"
 
+#if !WS2812_BACKEND_SPI
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -142,12 +144,29 @@ esp_err_t ws2812_new(gpio_num_t gpio, int led_count, ws2812_handle_t* out) {
     return ESP_ERR_NO_MEM;
   }
 
+  // Two things here are about deadlines rather than about LEDs.
+  //
+  // The ESP32-C3's RMT has no DMA — SOC_RMT_SUPPORT_DMA is defined for the S3
+  // and absent here — so the peripheral is refilled from an interrupt. A frame
+  // is 4,608 symbols; with a 48-symbol half-buffer that is 96 refills per
+  // frame, 9,600 a second, each with about 58 us of runway. Miss one and the
+  // strip sees an idle line, latches a partial frame and restarts at LED 0,
+  // which shows up as a few LEDs lighting that should be dark.
+  //
+  // mem_block_symbols takes all four of the group's blocks. Only one TX channel
+  // is ever used, so the other three are free, and claiming them doubles the
+  // runway to about 115 us at no cost.
+  //
+  // intr_priority puts the refill above the GPIO interrupt that decodes the
+  // encoder. Without it, turning the knob delays the refill: the first board
+  // glitched visibly while the knob was moving and was clean when it was not.
   const rmt_tx_channel_config_t ch_cfg = {
       .gpio_num = gpio,
       .clk_src = RMT_CLK_SRC_DEFAULT,
       .resolution_hz = WS2812_RESOLUTION_HZ,
-      .mem_block_symbols = 64,
+      .mem_block_symbols = 192,
       .trans_queue_depth = 4,
+      .intr_priority = 3,
   };
   esp_err_t err = rmt_new_tx_channel(&ch_cfg, &s->channel);
   if (err != ESP_OK) goto fail;
@@ -210,3 +229,5 @@ void ws2812_del(ws2812_handle_t h) {
   free(h->buf);
   free(h);
 }
+
+#endif  // !WS2812_BACKEND_SPI

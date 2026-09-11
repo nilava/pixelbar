@@ -20,6 +20,17 @@ namespace board {
 // Sets up the encoder interrupt and NVS. Safe to call once, from app_main.
 esp_err_t init();
 
+// Watches every pin the encoder could plausibly be on and reports which ones
+// actually move.
+//
+// A resting level tells you almost nothing — a floating pin and a correctly
+// pulled-up one read the same. What separates them is whether the level ever
+// changes when you turn the knob, and that is a question only the hardware can
+// answer. Call scan_begin() once, then scan_report() to see the tally.
+void scan_begin();
+void scan_poll();
+void scan_report(char* out, int cap);
+
 class DevicePorts : public ui::Ports {
  public:
   void read_raw(ui::RawInput* out) override;
@@ -41,6 +52,12 @@ class DevicePorts : public ui::Ports {
   // ordinary turning speed means the interrupt is being starved.
   int32_t encoder_detents() const;
   uint32_t encoder_illegal() const;
+
+  // The pins exactly as they read, before debouncing, virtual pads or any
+  // interpretation at all. When the panel does something you did not ask for,
+  // this is the difference between knowing which wire is wrong and guessing.
+  uint8_t raw_pads() const;     // bit 0 left, 1 middle, 2 right
+  uint8_t raw_encoder() const;  // bit 0 A, 1 B, 2 switch
 
   void set_wifi(bool up) { wifi_ = up; }
 

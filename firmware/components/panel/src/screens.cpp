@@ -181,15 +181,22 @@ bool status_uses_badge(Status s) { return !mini_text_fits(status_label(s)); }
 // this font, so MOVE measures 17 and does not fit while APPS at four does.
 // TILT and TAP are the versions that fit, and a test checks the whole table
 // rather than trusting the next entry to be measured by hand.
-// Only entries that go somewhere. The icons for APPS, TILT, TAP and NET are
-// drawn and waiting in icons.h, but a menu row that does nothing when you press
-// it is worse than a short menu: it teaches you that pressing does not work.
-// Each arrives with the feature behind it.
+// One entry, one destination. No chaining and no submenus.
+//
+// An earlier version had a DISP entry that opened brightness and then stepped
+// on to colour and then to the timer length when you pressed again — three
+// unrelated settings behind one row, reached in a fixed order, with no way back
+// except all the way home. Four rows that each go exactly one place is both
+// smaller and easier to explain.
+//
+// The icons for apps, motion, touch and network are drawn and waiting in
+// icons.h. They arrive with the features behind them: a row that does nothing
+// when you press it teaches you that pressing does not work.
 const MenuEntry kMenu[] = {
     {&kIconBusy, "STAT", RGB(255, 30, 15), false},
     {&kIconHourglass, "TIME", RGB(255, 138, 31), false},
-    {&kIconDisplay, "DISP", RGB(255, 200, 60), false},
-    {&kIconGear, "SYS", RGB(255, 120, 0), true},
+    {&kIconSunCore, "DIM", RGB(255, 200, 60), false},
+    {&kIconPalette, "HUE", RGB(140, 60, 255), false},
 };
 const int kMenuCount = static_cast<int>(sizeof(kMenu) / sizeof(kMenu[0]));
 

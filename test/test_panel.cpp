@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <set>
+#include <vector>
 
 #include "panel/config.h"
 #include "panel/flourish.h"
@@ -1458,6 +1459,54 @@ static void test_dither() {
   CHECK(st.est_ma > 10000.0f);
 }
 
+static void test_dither_is_not_periodic() {
+  CASE("a dim pixel at low brightness does not blink at one frequency");
+  {
+    // Plain sigma-delta on a constant input is exactly periodic. At brightness
+    // 6 a dim pixel works out at twelve 256ths of a step, which fires once
+    // every 21 frames — a dead-regular 4.7 Hz blink, right in the band the eye
+    // is most sensitive to. Jittering the comparator spreads that over a noise
+    // floor without moving the average.
+    Framebuffer fb;
+    fb.fill(RGB(40, 40, 40));
+    Renderer r;
+    r.reset_dither();
+    uint8_t grb[kNumLeds * 3];
+    std::vector<int> gaps;
+    int last = -1;
+    long pulses = 0;
+    for (int f = 0; f < 4000; ++f) {
+      r.render(fb, grb, 6, 100000.0f, kWiring);
+      if (grb[0]) {
+        ++pulses;
+        if (last >= 0) gaps.push_back(f - last);
+        last = f;
+      }
+    }
+    CHECK(gaps.size() > 50);
+
+    // Not one interval repeated: the spread is the whole point.
+    int mn = 1 << 30, mx = 0;
+    double mean = 0;
+    for (int g : gaps) {
+      if (g < mn) mn = g;
+      if (g > mx) mx = g;
+      mean += g;
+    }
+    mean /= static_cast<double>(gaps.size());
+    CHECK(mx - mn >= 4);
+
+    // And the average is still exactly what was asked for, because the error
+    // feedback is computed from the unjittered value. The noise moves when a
+    // pulse happens, never how many.
+    const int32_t k = static_cast<int32_t>((6 / 255.0f) * 65536.0f + 0.5f);
+    const int32_t exact = (static_cast<int32_t>(kGamma8[40]) * k) >> 8;
+    CHECK(exact > 0);
+    const double want = 256.0 / static_cast<double>(exact);
+    CHECK(std::fabs(mean - want) < want * 0.08);
+  }
+}
+
 static void test_transitions() {
   UiState ui;
   Framebuffer from, to, out;
@@ -1635,6 +1684,7 @@ int main() {
   test_digit_roll();
   test_transitions();
   test_dither();
+  test_dither_is_not_periodic();
   run_ui_tests();
   std::printf("%d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;

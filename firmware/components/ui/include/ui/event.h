@@ -88,6 +88,22 @@ struct GestureConfig {
   // Window the turn rate is averaged over, for the acceleration multiplier.
   float turn_window_s = 0.20f;
 
+  // The encoder's push switch is a bare mechanical contact with nothing
+  // debouncing it, unlike the TTP223s. It needs a longer window than they do —
+  // and not only for its own bounce. On a KY-040 module the switch shares its
+  // ground net with the rotary contacts, so turning the knob bounces that
+  // ground and the switch line dips with it. Untreated, ordinary turning
+  // registers as press-and-turn and the panel fights between changing screen
+  // and changing brightness.
+  float switch_stable_s = 0.015f;
+
+  // How long the switch must have been settled *down* before a turn counts as
+  // the press-and-turn modifier rather than an ordinary turn. Press-and-turn is
+  // a deliberate two-handed gesture; requiring the press to settle first is
+  // both true to that and the thing that makes a ground-bounce glitch
+  // impossible to mistake for one.
+  float press_turn_arm_s = 0.08f;
+
   // Motion thresholds, in g. The tap figure is the least grounded number in
   // the design and must be measured against a desk bump before it is trusted.
   float tap_g = 1.2f;

@@ -1,5 +1,6 @@
 #include "board/board.h"
 
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 
@@ -111,11 +112,76 @@ esp_err_t init() {
 
   ESP_RETURN_ON_ERROR(init_touch(), TAG, "touch");
   ESP_RETURN_ON_ERROR(init_encoder(), TAG, "encoder");
-  ESP_LOGI(TAG, "encoder on GPIO%d/%d, switch GPIO%d; pads GPIO%d/%d/%d",
-           static_cast<int>(pins::kEncoderA), static_cast<int>(pins::kEncoderB),
-           static_cast<int>(pins::kEncoderSw), static_cast<int>(pins::kTouchLeft),
-           static_cast<int>(pins::kTouchMiddle), static_cast<int>(pins::kTouchRight));
+
+  // Every input pin, as it rests, once. This is the line to read first when the
+  // panel does something nobody asked for.
+  ESP_LOGI(TAG, "fitted: touch=%d encoder=%d switch=%d motion=%d",
+           pins::kTouchFitted, pins::kEncoderFitted, pins::kEncoderSwitchFitted,
+           pins::kMotionFitted);
+  ESP_LOGI(TAG, "resting levels: pads L=%d M=%d R=%d, enc A=%d B=%d sw=%d",
+           gpio_get_level(pins::kTouchLeft), gpio_get_level(pins::kTouchMiddle),
+           gpio_get_level(pins::kTouchRight), gpio_get_level(pins::kEncoderA),
+           gpio_get_level(pins::kEncoderB), gpio_get_level(pins::kEncoderSw));
   return ESP_OK;
+}
+
+// ------------------------------------------------------------- pin scan
+
+namespace {
+
+// Every GPIO on the SuperMini that is brought out and not already spoken for by
+// the LED data line or the USB pins (18 and 19).
+const gpio_num_t kScanPins[] = {GPIO_NUM_0, GPIO_NUM_1, GPIO_NUM_2,  GPIO_NUM_3,
+                                GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6,  GPIO_NUM_7,
+                                GPIO_NUM_8, GPIO_NUM_9, GPIO_NUM_20, GPIO_NUM_21};
+constexpr int kScanCount = static_cast<int>(sizeof(kScanPins) / sizeof(kScanPins[0]));
+
+bool g_scan_on = false;
+uint8_t g_scan_last[kScanCount] = {0};
+uint16_t g_scan_edges[kScanCount] = {0};
+
+}  // namespace
+
+void scan_begin() {
+  for (int i = 0; i < kScanCount; ++i) {
+    // GPIO8 and 9 are strapping pins and GPIO2 is one too; they are read here
+    // but never configured, so the scan cannot change how the board boots.
+    if (kScanPins[i] == GPIO_NUM_2 || kScanPins[i] == GPIO_NUM_8 ||
+        kScanPins[i] == GPIO_NUM_9) {
+      continue;
+    }
+    gpio_config_t c = {};
+    c.pin_bit_mask = 1ULL << kScanPins[i];
+    c.mode = GPIO_MODE_INPUT;
+    c.pull_up_en = GPIO_PULLUP_ENABLE;
+    c.intr_type = GPIO_INTR_DISABLE;
+    gpio_config(&c);
+  }
+  for (int i = 0; i < kScanCount; ++i) {
+    g_scan_last[i] = gpio_get_level(kScanPins[i]) ? 1 : 0;
+    g_scan_edges[i] = 0;
+  }
+  g_scan_on = true;
+}
+
+void scan_poll() {
+  if (!g_scan_on) return;
+  for (int i = 0; i < kScanCount; ++i) {
+    const uint8_t now = gpio_get_level(kScanPins[i]) ? 1 : 0;
+    if (now != g_scan_last[i]) {
+      g_scan_last[i] = now;
+      if (g_scan_edges[i] < 60000) ++g_scan_edges[i];
+    }
+  }
+}
+
+void scan_report(char* out, int cap) {
+  int n = 0;
+  for (int i = 0; i < kScanCount && n < cap - 16; ++i) {
+    n += snprintf(out + n, cap - n, "%d:%d/%u ", static_cast<int>(kScanPins[i]),
+                  g_scan_last[i], static_cast<unsigned>(g_scan_edges[i]));
+  }
+  if (n < cap) out[n] = 0;
 }
 
 void DevicePorts::advance(float dt_s) {
@@ -124,20 +190,35 @@ void DevicePorts::advance(float dt_s) {
 }
 
 void DevicePorts::read_raw(ui::RawInput* out) {
-  out->touch[0] = gpio_get_level(pins::kTouchLeft) != 0;
-  out->touch[1] = gpio_get_level(pins::kTouchMiddle) != 0;
-  out->touch[2] = gpio_get_level(pins::kTouchRight) != 0;
+  if (pins::kTouchFitted) {
+    out->touch[0] = gpio_get_level(pins::kTouchLeft) != 0;
+    out->touch[1] = gpio_get_level(pins::kTouchMiddle) != 0;
+    out->touch[2] = gpio_get_level(pins::kTouchRight) != 0;
+  }
   // A web button and a soldered pad are the same thing from here up.
   pads_.apply(out->touch, ui::kZones);
 
   // Active low: the switch shorts to ground through the internal pull-up.
-  out->encoder_sw = gpio_get_level(pins::kEncoderSw) == 0;
-  out->encoder_detents = g_detents;
+  out->encoder_sw =
+      pins::kEncoderSwitchFitted && gpio_get_level(pins::kEncoderSw) == 0;
+  out->encoder_detents = pins::kEncoderFitted ? g_detents : 0;
 
   // The MPU-6050 is not fitted, and saying so is better than reporting a
   // plausible stationary reading: motion_valid false makes the whole motion
   // layer absent rather than wrong.
   out->motion_valid = false;
+}
+
+uint8_t DevicePorts::raw_pads() const {
+  return static_cast<uint8_t>((gpio_get_level(pins::kTouchLeft) ? 1 : 0) |
+                              (gpio_get_level(pins::kTouchMiddle) ? 2 : 0) |
+                              (gpio_get_level(pins::kTouchRight) ? 4 : 0));
+}
+
+uint8_t DevicePorts::raw_encoder() const {
+  return static_cast<uint8_t>((gpio_get_level(pins::kEncoderA) ? 1 : 0) |
+                              (gpio_get_level(pins::kEncoderB) ? 2 : 0) |
+                              (gpio_get_level(pins::kEncoderSw) ? 4 : 0));
 }
 
 int32_t DevicePorts::encoder_detents() const { return g_detents; }

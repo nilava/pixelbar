@@ -31,6 +31,16 @@ class Renderer {
   RenderStats render(const Framebuffer& fb, uint8_t* out_grb, uint8_t brightness,
                      float max_ma, const Wiring& w);
 
+  // A tiny PRNG used to break up the dither's periodicity. Seeded in
+  // reset_dither, so a test that resets first still gets identical output.
+  uint32_t rng_ = 1u;
+  uint32_t next_rand() {
+    rng_ ^= rng_ << 13;
+    rng_ ^= rng_ >> 17;
+    rng_ ^= rng_ << 5;
+    return rng_;
+  }
+
  private:
   int16_t err_[kNumLeds * 3];  // residue in 1/256ths of an output step
   bool dither_ = true;

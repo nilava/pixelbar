@@ -63,14 +63,27 @@ extern "C" void app_main(void) {
              static_cast<long long>(kMapTestSeconds));
   }
 
+  // Pins, pull-ups, the encoder interrupt and NVS. Without this the inputs are
+  // unconfigured: every pin floats, three of them wander in lockstep picking up
+  // the same ambient noise, and the encoder interrupt does not exist — which
+  // reads exactly like an encoder that is wired wrong.
+  const esp_err_t hw = board::init();
+  if (hw != ESP_OK) ESP_LOGE(TAG, "board init failed: %s", esp_err_to_name(hw));
+
   static board::DevicePorts ports;
   static ui::App app;
   app.begin(ports, 0.0);
   ESP_LOGI(TAG, "ready: turn the knob to change view, hold it for the menu");
 
+  // Which pins actually move when you turn the knob. Resting levels cannot
+  // tell a floating pin from a correctly pulled-up one; edges can.
+  constexpr bool kPinScan = false;
+  if (kPinScan) board::scan_begin();
+
   const int64_t boot_us = esp_timer_get_time();
   bool mapping = kMapTestSeconds > 0;
   bool warned_about_power = false;
+  ui::EventType last_ev = ui::EventType::None;
   int64_t last_log_us = boot_us;
 
   const TickType_t period = pdMS_TO_TICKS(1000 / panel::kFramesPerSecond);
@@ -90,9 +103,24 @@ extern "C" void app_main(void) {
       // Wiring check: a crisp single pixel, so dithering is off for it.
       engine.render_us(fb, t_us);
     } else {
+      if (kPinScan) board::scan_poll();
       ports.advance(a.dt);
       app.update(a.dt, a.t);
       app.render(fb, a);
+
+      // A live trace of what the recogniser made of the inputs. A press lasts
+      // sixty milliseconds and a periodic log samples every fifteen hundred, so
+      // without this the one thing you want to see is the one thing you never
+      // catch. Logged on change rather than every frame.
+      const ui::EventType ev = app.last_event();
+      if (ev != last_ev) {
+        last_ev = ev;
+        if (ev != ui::EventType::None) {
+          ESP_LOGI(TAG, "  %-14s -> %s / %s", ui::event_name(ev),
+                   panel::screen_name(app.screen()),
+                   panel::status_label(app.state().status));
+        }
+      }
     }
 
     const panel::RenderStats st =
@@ -112,18 +140,30 @@ extern "C" void app_main(void) {
     cur ^= 1;
 
     meter.tick(t_us);
-    if (esp_timer_get_time() - last_log_us > 5000000) {
+    if (esp_timer_get_time() - last_log_us > 1500000) {
       last_log_us = esp_timer_get_time();
       // The encoder's illegal-transition count is here on purpose: a non-zero
       // value at ordinary turning speed means the interrupt is being starved,
       // and that is far easier to see in a log line than on the panel.
       ESP_LOGI(TAG,
-               "fps=%.1f frame avg=%.2f ms max=%.2f ms  power=%.0f%%  "
-               "screen=%s  detents=%ld illegal=%lu",
+               "fps=%.1f avg=%.2fms max=%.2fms power=%.0f%% screen=%s "
+               "detents=%ld illegal=%lu  pads=%c%c%c enc A=%d B=%d sw=%d %s",
                meter.fps(), meter.frame_ms_avg(), meter.frame_ms_max(),
                st.power_scale * 100.0f, panel::screen_name(app.screen()),
                static_cast<long>(ports.encoder_detents()),
-               static_cast<unsigned long>(ports.encoder_illegal()));
+               static_cast<unsigned long>(ports.encoder_illegal()),
+               (ports.raw_pads() & 1) ? 'L' : '-',
+               (ports.raw_pads() & 2) ? 'M' : '-',
+               (ports.raw_pads() & 4) ? 'R' : '-',
+               (ports.raw_encoder() & 1) ? 1 : 0,
+               (ports.raw_encoder() & 2) ? 1 : 0,
+               (ports.raw_encoder() & 4) ? 1 : 0,
+               panel::status_label(app.state().status));
+      if (kPinScan) {
+        char scan[192];
+        board::scan_report(scan, sizeof(scan));
+        ESP_LOGI(TAG, "pins gpio:level/edges  %s", scan);
+      }
       meter.reset_peak();
     }
 

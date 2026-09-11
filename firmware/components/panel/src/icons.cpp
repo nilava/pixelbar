@@ -167,6 +167,19 @@ const Icon kIconDownload = {{
     IR(1,1,1,1,1,1,1,1),
 }};
 
+// Four blocks of colour. Drawn flat and coloured at the call site like every
+// other icon, so on the menu row it takes the entry's own colour.
+const Icon kIconPalette = {{
+    IR(0,0,1,1,1,1,0,0),
+    IR(0,1,1,1,1,1,1,0),
+    IR(1,1,0,0,1,1,1,1),
+    IR(1,1,0,0,1,1,1,1),
+    IR(1,1,1,1,0,0,1,1),
+    IR(1,1,1,1,0,0,1,1),
+    IR(0,1,1,1,1,1,1,0),
+    IR(0,0,1,1,1,1,0,0),
+}};
+
 // A lower-case i in a ring: about.
 const Icon kIconInfo = {{
     IR(0,0,1,1,1,1,0,0),

@@ -26,11 +26,6 @@ constexpr panel::Screen kHomeViews[] = {panel::Screen::Status, panel::Screen::Cl
                                         panel::Screen::Timer};
 constexpr int kHomeViewCount = 3;
 
-// The adjust screens, stepped through with the knob.
-constexpr panel::Screen kAdjustViews[] = {
-    panel::Screen::Brightness, panel::Screen::ColorPick, panel::Screen::TimerSet};
-constexpr int kAdjustViewCount = 3;
-
 // How deep navigation can go. Home, then a group, then a setting, plus slack.
 constexpr int kNavDepth = 4;
 
@@ -106,8 +101,7 @@ class App {
 
   NavFrame nav_[kNavDepth];
   int depth_ = 1;
-  int view_ = 0;    // index into kHomeViews
-  int adjust_ = 0;  // index into kAdjustViews
+  int view_ = 0;  // index into kHomeViews
 
   bool asleep_ = false;
   bool booting_ = true;

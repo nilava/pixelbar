@@ -241,16 +241,11 @@ void App::enter_menu_entry() {
     ui_.pick = ui_.status;
     push(Screen::StatusPick, TransitionKind::WipeUp);
   } else if (is("TIME")) {
-    adjust_ = 2;  // TimerSet
-    push(kAdjustViews[2], TransitionKind::WipeUp);
-  } else if (is("DISP")) {
-    adjust_ = 0;  // Brightness, then the knob steps on to colour
-    push(kAdjustViews[0], TransitionKind::WipeUp);
-  } else {
-    // SYS has nothing behind it yet. Acknowledge rather than ignore: silence
-    // reads as a button that did not work.
-    mgr_.restart_with(ui_, TransitionKind::Ignite,
-                      panel::transition_seconds(TransitionKind::Ignite));
+    push(Screen::TimerSet, TransitionKind::WipeUp);
+  } else if (is("DIM")) {
+    push(Screen::Brightness, TransitionKind::WipeUp);
+  } else if (is("HUE")) {
+    push(Screen::ColorPick, TransitionKind::WipeUp);
   }
 }
 
@@ -283,8 +278,12 @@ void App::sleep() {
 }
 
 void App::adjust(int detents, float rate) {
-  // A brisk sweep steps faster, so a range of 0..255 does not need fifty
-  // clicks — but a single deliberate detent is never multiplied.
+  // Acceleration applies to *values* and never to *lists*.
+  //
+  // A brightness of 0..255 would otherwise need fifty clicks, so a brisk sweep
+  // multiplies the step. A carousel of three views and a menu of four do not
+  // want that: multiplying a list just makes it skip entries, and the thing you
+  // were reaching for goes past.
   const int step = (rate >= kFastTurnRate) ? kFastTurnStep : 1;
   const int d = detents * step;
 
@@ -321,9 +320,14 @@ void App::adjust(int detents, float rate) {
       // The list scrolls by changing the index and restarting the screen with a
       // disk transition. The outgoing frame still holds the previous entry,
       // which is the whole reason restart_with takes the state being left.
+      //
+      // By raw detents, not by one per frame: spinning three clicks should land
+      // three entries on in one movement, rather than starting and abandoning
+      // three transitions in thirty milliseconds, which is what made a fast
+      // turn feel like the panel was fighting itself.
       const int n = panel::kMenuCount;
-      int next = wrap_index(static_cast<int>(ui_.menu_index) + (d > 0 ? 1 : -1), n);
-      const TransitionKind k = d > 0 ? TransitionKind::DiskUp : TransitionKind::DiskDown;
+      const int next = wrap_index(static_cast<int>(ui_.menu_index) + detents, n);
+      const TransitionKind k = detents > 0 ? TransitionKind::DiskUp : TransitionKind::DiskDown;
       mgr_.restart_with(ui_, k, panel::transition_seconds(k));
       ui_.menu_index = static_cast<uint8_t>(next);
       break;
@@ -331,20 +335,16 @@ void App::adjust(int detents, float rate) {
 
     case Screen::StatusPick: {
       const int n = static_cast<int>(Status::Count);
-      const int next = wrap_index(static_cast<int>(ui_.pick) + (d > 0 ? 1 : -1), n);
-      const TransitionKind k = d > 0 ? TransitionKind::DiskUp : TransitionKind::DiskDown;
+      const int next = wrap_index(static_cast<int>(ui_.pick) + detents, n);
+      const TransitionKind k = detents > 0 ? TransitionKind::DiskUp : TransitionKind::DiskDown;
       mgr_.restart_with(ui_, k, panel::transition_seconds(k));
       ui_.pick = static_cast<Status>(next);
       break;
     }
 
     default:
-      // At rest the knob moves through the home views.
-      if (d > 0) {
-        goto_view(view_ + 1);
-      } else if (d < 0) {
-        goto_view(view_ - 1);
-      }
+      // At rest the knob moves through the home views, again by raw detents.
+      if (detents != 0) goto_view(view_ + detents);
       break;
   }
 }
@@ -436,19 +436,6 @@ void App::handle(const Event& e, double now_s) {
       adjust(e.delta, e.velocity);
       break;
 
-    case EventType::PressTurn: {
-      // Brightness from anywhere, without leaving the screen you are on.
-      int v = ui_.brightness + e.delta * 6;
-      if (v < 4) v = 4;
-      if (v > 255) v = 255;
-      ui_.brightness = static_cast<uint8_t>(v);
-      // Without this the gesture changes something you cannot see it changing,
-      // on whatever screen you happen to be on.
-      fl_.bar(ui_.accent, ui_.brightness / 255.0f, now_s);
-      note_change();
-      break;
-    }
-
     case EventType::Press:
       if (screen() == Screen::Menu) {
         enter_menu_entry();
@@ -459,16 +446,9 @@ void App::handle(const Event& e, double now_s) {
         go_home();
         set_status(chosen);
       } else if (depth_ > 1) {
-        // Inside an adjuster: step to the next one, then back out the far end.
-        adjust_ = adjust_ + 1;
-        if (adjust_ >= kAdjustViewCount) {
-          adjust_ = 0;
-          go_home();
-        } else {
-          nav_[depth_ - 1].screen = kAdjustViews[adjust_];
-          mgr_.go_to(kAdjustViews[adjust_], ui_, TransitionKind::DiskUp,
-                     panel::transition_seconds(TransitionKind::DiskUp));
-        }
+        // Inside an adjuster, pressing accepts and goes back one level — to the
+        // menu you came from, not onward to some unrelated setting.
+        pop();
       } else if (screen() == Screen::Status) {
         set_status(ui_.status == Status::Busy ? Status::Free : Status::Busy);
       } else if (screen() == Screen::Timer) {
@@ -481,11 +461,13 @@ void App::handle(const Event& e, double now_s) {
       break;
 
     case EventType::PressHoldBegin:
+      // Press goes in, hold goes out. One rule at every level, so there is
+      // always a way back that does not depend on remembering how deep you are.
       if (depth_ == 1) {
         ui_.menu_index = 0;
         push(Screen::Menu, TransitionKind::WipeUp);
       } else {
-        go_home();
+        pop();
       }
       break;
 

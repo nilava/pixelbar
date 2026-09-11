@@ -6,6 +6,16 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+// Which peripheral clocks the data line out.
+//
+// SPI, because the ESP32-C3's RMT has no DMA and therefore cannot meet a 50 us
+// latch deadline reliably once anything else wants an interrupt. The RMT
+// backend is kept for comparison on the bench — set this to 0 to build it —
+// but it is not the one to ship on this chip. See ws2812_spi.c.
+#ifndef WS2812_BACKEND_SPI
+#define WS2812_BACKEND_SPI 1
+#endif
+
 #include "esp_err.h"
 #include "hal/gpio_types.h"
 

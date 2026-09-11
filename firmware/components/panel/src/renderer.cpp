@@ -12,6 +12,7 @@ void Renderer::reset_dither() {
   // neighbouring LEDs and the three channels of one LED all dither out of
   // phase. Deterministic, so the output is reproducible in tests.
   for (int i = 0; i < kNumLeds * 3; ++i) err_[i] = static_cast<int16_t>((i * 149) & 0xFF);
+  rng_ = 0x1234567u;
 }
 
 RenderStats Renderer::render(const Framebuffer& fb, uint8_t* out_grb, uint8_t brightness,
@@ -57,11 +58,36 @@ RenderStats Renderer::render(const Framebuffer& fb, uint8_t* out_grb, uint8_t br
         // Exact value in 1/256ths of an output step.
         const int32_t exact = (static_cast<int32_t>(gam[order[c]]) * k) >> 8;
         int32_t v = exact;
-        if (dither_) v += err_[dst + c];
-        int32_t out = v >> 8;
-        if (out < 0) out = 0;
-        if (out > 255) out = 255;
-        if (dither_) err_[dst + c] = static_cast<int16_t>(v - (out << 8));
+        int32_t out;
+        if (dither_) {
+          v += err_[dst + c];
+          // A noisy comparator, not a fixed one.
+          //
+          // Plain sigma-delta on a constant input is exactly periodic: an
+          // effective value of four 256ths fires once every sixty-four frames,
+          // which at 100 fps is a 1.6 Hz blink. That is invisible at ordinary
+          // levels, where the period is a handful of frames, and it is the
+          // whole story at low brightness, where every dim pixel ends up in
+          // that range. Jittering the threshold spreads the same average over a
+          // noise floor instead of one low frequency.
+          //
+          // The error feedback is computed from the *unjittered* value, so the
+          // accumulator still converges on the exact average — the noise moves
+          // when a pulse happens, never how many.
+          const int32_t jitter = static_cast<int32_t>(next_rand() & 0xFF);
+          out = (v + jitter) >> 8;
+          if (out < 0) out = 0;
+          if (out > 255) out = 255;
+          err_[dst + c] = static_cast<int16_t>(v - (out << 8));
+          // Bounded, so a clamp at either end cannot let the accumulator run
+          // away and take a whole second to come back.
+          if (err_[dst + c] > 512) err_[dst + c] = 512;
+          if (err_[dst + c] < -512) err_[dst + c] = -512;
+        } else {
+          out = v >> 8;
+          if (out < 0) out = 0;
+          if (out > 255) out = 255;
+        }
         out_grb[dst + c] = static_cast<uint8_t>(out);
       }
     }

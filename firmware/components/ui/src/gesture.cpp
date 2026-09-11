@@ -46,6 +46,8 @@ void Recogniser::reset() {
   swipe_len_ = 0;
   swipe_last_s_ = 0.0f;
   sw_down_ = false;
+  sw_raw_ = false;
+  sw_stable_s_ = 0.0f;
   sw_down_s_ = 0.0f;
   sw_since_release_s_ = 0.0f;
   sw_hold_fired_ = false;
@@ -209,41 +211,18 @@ int Recogniser::update(const RawInput& in, float dt_s, Event* out, int max) {
   }
 
   // ---------------------------------------------------------------- encoder
-  // No priming: the interrupt's counter starts at zero and so does this, so
-  // the first detent of the session is a real one. Priming on the first frame
-  // would swallow it, which on hardware reads as the encoder ignoring the very
-  // first click after boot.
-  const int32_t det = in.encoder_detents;
-  const int32_t ddet = det - last_detents_;
-  last_detents_ = det;
-
-  // Rate over a sliding window, so a long sweep can be made to step faster
-  // without a single slow detent ever being multiplied.
-  turn_win_s_ += dt_s;
-  turn_accum_ += static_cast<float>(ddet < 0 ? -ddet : ddet);
-  float rate = 0.0f;
-  if (turn_win_s_ >= cfg_.turn_window_s) {
-    rate = turn_accum_ / turn_win_s_;
-    turn_accum_ = 0.0f;
-    turn_win_s_ = 0.0f;
-    last_rate_ = rate;
+  //
+  // The switch is settled before the turn is judged, not after. Reading a stale
+  // switch state would put the modifier decision one frame behind the movement
+  // it is supposed to qualify.
+  if (in.encoder_sw != sw_raw_) {
+    sw_raw_ = in.encoder_sw;
+    sw_stable_s_ = 0.0f;
   } else {
-    rate = last_rate_;
+    sw_stable_s_ += dt_s;
   }
-
-  if (ddet != 0) {
-    if (sw_down_) {
-      sw_turned_while_down_ = true;
-      n = emit(out, max, n,
-               Event(EventType::PressTurn, 0, static_cast<int16_t>(ddet), rate));
-    } else {
-      n = emit(out, max, n, Event(EventType::Turn, 0, static_cast<int16_t>(ddet), rate));
-    }
-  }
-
-  // The switch, with the same shape as a zone.
-  if (in.encoder_sw != sw_down_) {
-    sw_down_ = in.encoder_sw;
+  if (sw_stable_s_ >= cfg_.switch_stable_s && sw_down_ != sw_raw_) {
+    sw_down_ = sw_raw_;
     if (sw_down_) {
       sw_down_s_ = 0.0f;
       sw_hold_fired_ = false;
@@ -275,6 +254,44 @@ int Recogniser::update(const RawInput& in, float dt_s, Event* out, int max) {
     if (sw_press_pending_ && sw_since_release_s_ > cfg_.double_tap_s) {
       sw_press_pending_ = false;
     }
+  }
+
+  // No priming: the interrupt's counter starts at zero and so does this, so
+  // the first detent of the session is a real one. Priming on the first frame
+  // would swallow it, which on hardware reads as the encoder ignoring the very
+  // first click after boot.
+  const int32_t det = in.encoder_detents;
+  const int32_t ddet = det - last_detents_;
+  last_detents_ = det;
+
+  // Rate over a sliding window, so a long sweep can be made to step faster
+  // without a single slow detent ever being multiplied.
+  turn_win_s_ += dt_s;
+  turn_accum_ += static_cast<float>(ddet < 0 ? -ddet : ddet);
+  float rate = 0.0f;
+  if (turn_win_s_ >= cfg_.turn_window_s) {
+    rate = turn_accum_ / turn_win_s_;
+    turn_accum_ = 0.0f;
+    turn_win_s_ = 0.0f;
+    last_rate_ = rate;
+  } else {
+    rate = last_rate_;
+  }
+
+  if (ddet != 0) {
+    // Turning while the knob is held is just a turn.
+    //
+    // It used to be its own gesture that adjusted brightness from any screen.
+    // That was a mistake twice over: it duplicated a path that already exists
+    // through the menu, and it is physically unreliable on this hardware —
+    // on a KY-040 the push switch shares its ground with the rotary contacts,
+    // so turning the knob dips the switch line and an ordinary turn kept being
+    // read as the modifier. Two gestures competing for one movement is worse
+    // than one gesture and a menu.
+    //
+    // The flag is still set, so releasing after a turn does not also click.
+    if (sw_down_) sw_turned_while_down_ = true;
+    n = emit(out, max, n, Event(EventType::Turn, 0, static_cast<int16_t>(ddet), rate));
   }
 
   // ---------------------------------------------------------------- motion

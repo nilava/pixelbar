@@ -22,4 +22,21 @@ constexpr gpio_num_t kEncoderA = GPIO_NUM_20;
 constexpr gpio_num_t kEncoderB = GPIO_NUM_21;
 constexpr gpio_num_t kEncoderSw = GPIO_NUM_0;
 
+// Which inputs are physically present.
+//
+// An unpopulated pin is not a quiet pin. With nothing driving it, a weak
+// internal pull is all that holds it, and a 192-LED data line switching a
+// metre of unshielded wire away is enough to beat that: the first board read
+// its unwired left and right pads as touched, which the state machine dutifully
+// took for a chord and put the panel to sleep.
+//
+// So the firmware is told what exists rather than inferring it. A pin that is
+// not fitted is never read, and the layer above it is absent rather than wrong
+// — the same reason the accelerometer reports motion_valid false instead of a
+// plausible stationary reading.
+constexpr bool kTouchFitted = false;         // TTP223 modules not soldered yet
+constexpr bool kEncoderFitted = true;
+constexpr bool kEncoderSwitchFitted = true;
+constexpr bool kMotionFitted = false;        // MPU-6050 not fitted
+
 }  // namespace pins
