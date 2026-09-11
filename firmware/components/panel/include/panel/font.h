@@ -43,6 +43,15 @@ int draw_char(Framebuffer& fb, int x, int y, char c, RGB color);
 // Returns the advance width drawn.
 int draw_text(Framebuffer& fb, int x, int y, const char* s, RGB color);
 
+// Width of the ink alone, without the trailing inter-character gap.
+int text_ink_width(const char* s);
+
+// True if the string can be shown whole, without scrolling.
+bool text_fits(const char* s);
+
+// Draws horizontally centred. Returns the x it started at.
+int draw_text_centered(Framebuffer& fb, int y, const char* s, RGB color);
+
 // 3x5 digits, '0'..'9'. Returns nullptr otherwise. 5 rows, bit 2 leftmost.
 const uint8_t* tiny_digit(char c);
 constexpr int kTinyW = 3;

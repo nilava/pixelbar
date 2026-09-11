@@ -15,6 +15,7 @@
 #include "panel/config.h"
 #include "panel/framebuffer.h"
 #include "panel/patterns.h"
+#include "panel/screens.h"
 
 using namespace panel;
 
@@ -171,13 +172,97 @@ void render_sheet(Pattern pat, const std::string& dir) {
   }
 }
 
+// Each screen sheet shows four states of that screen rather than four moments
+// in time, so one image says what the screen is for.
+void vary_state(Screen s, int frame, UiState& ui) {
+  switch (s) {
+    case Screen::Status:
+      ui.status = static_cast<Status>(frame % static_cast<int>(Status::Count));
+      break;
+    case Screen::Clock:
+      ui.hour = 9 + frame * 2;
+      ui.minute = 5 + frame * 17;
+      ui.second = frame * 14;
+      break;
+    case Screen::Timer: {
+      const int left[] = {25 * 60, 12 * 60 + 30, 60 + 5, 45};
+      ui.timer_left_s = left[frame % 4];
+      ui.timer_running = frame != 3;  // the last one is paused, so it blinks
+      break;
+    }
+    case Screen::Brightness: {
+      const uint8_t b[] = {26, 89, 178, 255};
+      ui.brightness = b[frame % 4];
+      break;
+    }
+    case Screen::ColorPick:
+      ui.hue = frame * 0.25f + 0.04f;
+      break;
+    case Screen::TimerSet: {
+      const int m[] = {5, 25, 45, 60};
+      ui.timer_set_min = m[frame % 4];
+      break;
+    }
+    case Screen::Booting:
+      ui.wifi_connected = (frame == 3);
+      break;
+    default:
+      break;
+  }
+}
+
+void render_screen_sheet(Screen s, const std::string& dir) {
+  const int fw = kWidth * kPitch + 2 * kMargin;
+  const int fh = kHeight * kPitch + 2 * kMargin;
+  Image img(fw, kFramesPerSheet * fh + (kFramesPerSheet - 1) * kFrameGap);
+
+  Framebuffer fb;
+  uint8_t grb[kNumLeds * 3];
+  for (int frame = 0; frame < kFramesPerSheet; ++frame) {
+    UiState ui;
+    ui.accent = RGB(255, 138, 31);
+    ui.hour = 14;
+    ui.minute = 25;
+    ui.second = 37;
+    vary_state(s, frame, ui);
+    // Offset the clock per frame so pulses and blinks land in different phases.
+    const uint32_t now = 300u + frame * 700u;
+    draw_screen(fb, s, ui, now);
+    fb.render(grb, kPreviewBrightness, kMaxMilliamps, kWiring);
+    draw_frame(img, grb, kMargin, frame * (fh + kFrameGap) + kMargin);
+  }
+
+  const std::vector<float> halo = blur(img.px, img.w, img.h, 5);
+  for (size_t i = 0; i < img.px.size(); ++i) img.px[i] += halo[i] * kGlow;
+  for (int y = 0; y < img.h; ++y) {
+    for (int x = 0; x < img.w; ++x) {
+      const size_t i = (static_cast<size_t>(y) * img.w + x) * 3;
+      img.px[i] += 11;
+      img.px[i + 1] += 13;
+      img.px[i + 2] += 16;
+    }
+  }
+
+  const std::string path = dir + "/" + screen_name(s) + ".ppm";
+  if (write_ppm(path, img)) {
+    std::printf("  %s\n", path.c_str());
+  } else {
+    std::printf("  FAILED to write %s\n", path.c_str());
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-  const std::string dir = (argc > 1) ? argv[1] : ".";
-  std::printf("rendering previews into %s\n", dir.c_str());
+  const std::string pdir = (argc > 1) ? argv[1] : "docs/preview";
+  const std::string sdir = (argc > 2) ? argv[2] : "docs/screens";
+  std::printf("patterns into %s\n", pdir.c_str());
   for (int i = 0; i < static_cast<int>(Pattern::Count); ++i) {
-    render_sheet(static_cast<Pattern>(i), dir);
+    render_sheet(static_cast<Pattern>(i), pdir);
+  }
+  std::printf("screens into %s\n", sdir.c_str());
+  for (int i = 0; i < static_cast<int>(Screen::Count); ++i) {
+    render_screen_sheet(static_cast<Screen>(i), sdir);
   }
   return 0;
 }

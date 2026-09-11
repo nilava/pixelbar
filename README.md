@@ -11,16 +11,56 @@ snap-fit printed case, behind a per-LED light grid and a diffuser.
 
 ## Status
 
-**Step 1 of the firmware is done: the display layer.** Framebuffer, LED
-mapping, proportional font, pattern set, gamma and the power cap are unit
-tested on the host, and the ESP32-C3 image builds and is ready to flash.
+**Step 1 of the firmware is done: the display layer and the screens.**
+Framebuffer, LED mapping, proportional font, patterns, the UI screens, gamma
+and the power cap are unit tested on the host, and the ESP32-C3 image builds
+and is ready to flash.
 
 None of it has run on real LEDs yet, because the boards are not built. The
 first job once they are is the mapping calibration below.
 
-Still to come, in order: inputs and the status state machine, the MPU-6050,
-WiFi with a web page and OTA, the Mac helper that flips the panel to BUSY when
-your microphone opens, then Slack and calendar.
+Still to come, in order: reading the inputs and driving the state machine
+below, the MPU-6050, WiFi with a web page and OTA, the Mac helper that flips
+the panel to BUSY when your microphone opens, then Slack and calendar.
+
+## Controls and screens
+
+Three touch zones sit under the top edge, marked by printed dimples, and the
+encoder knob is on the top edge at the right.
+
+| Input | Action |
+| --- | --- |
+| Left zone, tap | FREE ↔ BUSY |
+| Left zone, hold | CALL |
+| Middle zone, tap | Start or pause the focus timer |
+| Middle zone, hold | Reset the timer to its set length |
+| Right zone, tap | Cycle the view: status → clock → timer |
+| Right zone, hold | DND on or off |
+| Knob, turn | Brightness, or the value on an adjust screen |
+| Knob, press | Step through the adjust screens: brightness → colour → timer length |
+| Knob, hold | Sleep or wake |
+| Double-tap the case | Same as a tap on the left zone |
+| Lay the panel flat | Sleep |
+
+The status words are each 23 px wide in the proportional font, so they sit
+still and centred rather than scrolling. Anything wider than the panel scrolls
+automatically.
+
+![status screens](docs/screens/status.png)
+
+FREE, BUSY, CALL and DND. CALL pulses gently, because it is the one status
+that means "not even a quick question".
+
+| | |
+| --- | --- |
+| ![timer](docs/screens/timer.png) | ![colour picker](docs/screens/colorpick.png) |
+
+The focus timer counts down with a progress bar, turns red in the last minute
+and blinks while paused. The colour picker is a hue ramp you scrub with the
+knob. Brightness and timer length share a number-plus-bar layout.
+
+Every screen is a pure function of `UiState` and the clock, so the state
+machine can be built and tested without touching the drawing code.
 
 ## Hardware
 
@@ -80,9 +120,10 @@ Once it is right, set `kMapTestSeconds` to 0 in `firmware/main/main.cpp`.
 The whole drawing layer is free of ESP-IDF, so it builds and runs on a laptop.
 
 ```bash
-./test/run.sh                      # builds and runs the tests
-./build-host/preview docs/preview  # renders every pattern
+./test/run.sh                                    # builds and runs the tests
+./build-host/preview docs/preview docs/screens   # renders patterns and screens
 python3 tools/ppm2png.py docs/preview
+python3 tools/ppm2png.py docs/screens
 ```
 
 The preview reads back the same GRB bytes that would go out on the wire,
@@ -103,7 +144,7 @@ enforced in the render path, not in the patterns, so no pattern can exceed it.
 ## Layout
 
 ```
-firmware/components/panel/   framebuffer, mapping, font, patterns (no IDF deps)
+firmware/components/panel/   framebuffer, mapping, font, patterns, screens (no IDF deps)
 firmware/components/ws2812/  WS2812B over RMT, no external components
 firmware/main/               app_main, GPIO map
 test/                        host-side tests

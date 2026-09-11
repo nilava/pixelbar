@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "panel/font.h"
+#include "panel/screens.h"
 
 namespace panel {
 namespace {
@@ -93,8 +94,15 @@ void Engine::render(Framebuffer& fb, uint32_t now_ms) {
 }
 
 void Engine::draw_text(Framebuffer& fb) {
-  const int textW = measure_text(params.text);
-  const int total = textW + kWidth;  // scroll fully off before repeating
+  // Short strings sit still and centred. A status word like BUSY is 23 px
+  // wide, and scrolling something that already fits just makes it harder to
+  // read from across the room.
+  if (text_fits(params.text)) {
+    scroll_ = 0.0f;
+    draw_text_centered(fb, 0, params.text, params.color);
+    return;
+  }
+  const int total = measure_text(params.text) + kWidth;  // scroll fully off, then repeat
   if (total <= 0) return;
   while (scroll_ >= static_cast<float>(total)) scroll_ -= static_cast<float>(total);
   const int x = kWidth - static_cast<int>(scroll_);
@@ -102,30 +110,10 @@ void Engine::draw_text(Framebuffer& fb) {
 }
 
 void Engine::draw_clock(Framebuffer& fb) {
-  // Normalise into range by hand rather than formatting: it cannot overflow,
-  // and it keeps a negative or out-of-range input from drawing nonsense.
-  const int h = ((params.hour % 24) + 24) % 24;
-  const int m = ((params.minute % 60) + 60) % 60;
-  const char hh[2] = {static_cast<char>('0' + h / 10), static_cast<char>('0' + h % 10)};
-  const char mm[2] = {static_cast<char>('0' + m / 10), static_cast<char>('0' + m % 10)};
-
-  // 4 digits at 4 px each plus a 2 px colon = 18 px, centred in 24.
-  int x = 3;
-  const int y = 1;
-  draw_tiny_digit(fb, x, y, hh[0], params.color); x += 4;
-  draw_tiny_digit(fb, x, y, hh[1], params.color); x += 4;
-  if (params.second % 2 == 0) {
-    fb.set(x, y + 1, params.color);
-    fb.set(x, y + 3, params.color);
-  }
-  x += 2;
-  draw_tiny_digit(fb, x, y, mm[0], params.color); x += 4;
-  draw_tiny_digit(fb, x, y, mm[1], params.color);
-
-  // Seconds as a progress bar along the bottom row.
-  const RGB dim = params.color.scaled(90);
-  const int lit = (params.second * kWidth) / 60;
-  for (int i = 0; i < lit; ++i) fb.set(i, kHeight - 1, dim);
+  // One implementation of the clock face, shared with Screen::Clock.
+  draw_clock_face(fb, params.hour, params.minute, params.second % 2 == 0, params.color);
+  draw_bar(fb, kHeight - 1, kHeight - 1, params.second / 60.0f,
+           params.color.scaled(90), RGB(0, 0, 0));
 }
 
 void Engine::draw_rainbow(Framebuffer& fb) {

@@ -11,6 +11,7 @@
 #include "panel/font.h"
 #include "panel/framebuffer.h"
 #include "panel/patterns.h"
+#include "panel/screens.h"
 
 using namespace panel;
 
@@ -313,13 +314,19 @@ static void test_engine() {
   wrap.render(fb4, wt);
   CHECK_NEAR(wrap.anim_time(), 0.1f, 0.001f);
 
-  CASE("text starts off the right edge and scrolls in");
+  CASE("long text starts off the right edge and scrolls in");
   e.set_pattern(Pattern::Text);
+  e.set_text("SCROLLING MESSAGE");
+  t += 16;
+  e.render(fb, t);
+  CHECK_EQ(lit_count(fb), 0);  // one frame in, nothing has entered yet
+  run_frames(e, fb, 60, &t);   // a second later it is on the panel
+  CHECK(lit_count(fb) > 0);
+
+  CASE("short text appears immediately, centred");
   e.set_text("A");
   t += 16;
   e.render(fb, t);
-  CHECK_EQ(lit_count(fb), 0);  // one frame in, the glyph has not entered yet
-  run_frames(e, fb, 60, &t);   // a second later it is on the panel
   CHECK(lit_count(fb) > 0);
 
   CASE("the clock draws its digits");
@@ -343,6 +350,7 @@ static void test_engine() {
 
   CASE("changing pattern restarts the scroll");
   e.set_pattern(Pattern::Text);
+  e.set_text("SCROLLING MESSAGE");
   run_frames(e, fb, 120, &t);
   CHECK(e.scroll_px() > 0.0f);
   e.set_pattern(Pattern::Plasma);
@@ -400,6 +408,179 @@ static void test_engine() {
   CHECK_EQ(white, 1);
 }
 
+// ---------------------------------------------------------------- screens
+
+static void test_screens() {
+  CASE("every status word fits without scrolling");
+  for (int i = 0; i < static_cast<int>(Status::Count); ++i) {
+    const char* label = status_label(static_cast<Status>(i));
+    CHECK(text_fits(label));
+  }
+  CHECK_EQ(text_ink_width("BUSY"), 23);  // 23 of the 24 columns
+  CHECK(text_fits("BUSY"));
+  CHECK(!text_fits("FOCUS SESSION"));
+
+  CASE("a string that fits is drawn centred and still");
+  Engine e;
+  Framebuffer a, b;
+  e.set_pattern(Pattern::Text);
+  e.set_text("BUSY");
+  uint32_t t = 0;
+  e.render(a, t);
+  run_frames(e, b, 120, &t);  // two seconds later
+  CHECK_EQ(e.scroll_px(), 0.0f);
+  for (int y = 0; y < kHeight; ++y)
+    for (int x = 0; x < kWidth; ++x) CHECK(a.get(x, y) == b.get(x, y));
+  CHECK(lit_count(a) > 0);
+
+  CASE("a string too wide to fit still scrolls");
+  Engine e2;
+  Framebuffer c, d;
+  e2.set_pattern(Pattern::Text);
+  e2.set_text("FOCUS SESSION RUNNING");
+  uint32_t t2 = 0;
+  run_frames(e2, c, 60, &t2);
+  run_frames(e2, d, 60, &t2);
+  CHECK(e2.scroll_px() > 0.0f);
+  bool differs = false;
+  for (int y = 0; y < kHeight && !differs; ++y)
+    for (int x = 0; x < kWidth && !differs; ++x)
+      if (!(c.get(x, y) == d.get(x, y))) differs = true;
+  CHECK(differs);
+
+  CASE("each status has its own colour");
+  std::set<uint32_t> colors;
+  for (int i = 0; i < static_cast<int>(Status::Count); ++i) {
+    const RGB col = status_color(static_cast<Status>(i));
+    colors.insert((uint32_t)col.r << 16 | (uint32_t)col.g << 8 | col.b);
+  }
+  CHECK_EQ(colors.size(), static_cast<int>(Status::Count));
+
+  CASE("bars fill in proportion");
+  Framebuffer bar;
+  bar.clear();
+  draw_bar(bar, 7, 7, 0.0f, RGB(255, 255, 255), RGB(0, 0, 0));
+  CHECK_EQ(lit_count(bar), 0);
+  draw_bar(bar, 7, 7, 1.0f, RGB(255, 255, 255), RGB(0, 0, 0));
+  CHECK_EQ(lit_count(bar), kWidth);
+  draw_bar(bar, 7, 7, 0.5f, RGB(255, 255, 255), RGB(0, 0, 0));
+  CHECK_EQ(lit_count(bar), kWidth / 2);
+  CASE("bars clamp instead of overflowing");
+  draw_bar(bar, 7, 7, 5.0f, RGB(255, 255, 255), RGB(0, 0, 0));
+  CHECK_EQ(lit_count(bar), kWidth);
+  draw_bar(bar, 7, 7, -1.0f, RGB(255, 255, 255), RGB(0, 0, 0));
+  CHECK_EQ(lit_count(bar), 0);
+
+  CASE("every screen draws inside the panel and within the power budget");
+  uint8_t buf[kNumLeds * 3];
+  for (int i = 0; i < static_cast<int>(Screen::Count); ++i) {
+    const Screen s = static_cast<Screen>(i);
+    UiState ui;
+    Framebuffer fb;
+    for (uint32_t now = 0; now < 4000; now += 250) {
+      draw_screen(fb, s, ui, now);
+      const float k = fb.render(buf, kDefaultBrightness, kMaxMilliamps, kWiring);
+      CHECK(k > 0.0f && k <= 1.0f);
+    }
+  }
+
+  CASE("the status screen shows the status colour");
+  UiState ui;
+  Framebuffer fb;
+  ui.status = Status::Busy;
+  draw_screen(fb, Screen::Status, ui, 0);
+  CHECK(lit_count(fb) > 0);
+  bool found_busy = false;
+  for (int y = 0; y < kHeight; ++y)
+    for (int x = 0; x < kWidth; ++x)
+      if (fb.get(x, y) == status_color(Status::Busy)) found_busy = true;
+  CHECK(found_busy);
+
+  CASE("a timer longer than 24 minutes is not wrapped like a clock");
+  {
+    // 25:00 must read as twenty-five minutes. Sharing the clock's hour
+    // normalisation once turned it into 01:00.
+    Framebuffer t25, t1;
+    draw_pair_face(t25, 25, 0, true, RGB(255, 255, 255));
+    draw_pair_face(t1, 1, 0, true, RGB(255, 255, 255));
+    bool same = true;
+    for (int y = 0; y < kHeight && same; ++y)
+      for (int x = 0; x < kWidth && same; ++x)
+        if (!(t25.get(x, y) == t1.get(x, y))) same = false;
+    CHECK(!same);
+    CASE("both digit groups clamp instead of overflowing");
+    Framebuffer big, cap;
+    draw_pair_face(big, 250, 300, true, RGB(255, 255, 255));
+    draw_pair_face(cap, 99, 99, true, RGB(255, 255, 255));
+    for (int y = 0; y < kHeight; ++y)
+      for (int x = 0; x < kWidth; ++x) CHECK(big.get(x, y) == cap.get(x, y));
+  }
+
+  CASE("the timer turns red in the last minute");
+  ui.timer_total_s = 25 * 60;
+  ui.timer_running = true;
+  ui.timer_left_s = 10 * 60;
+  draw_screen(fb, Screen::Timer, ui, 0);
+  const int lit_calm = lit_count(fb);
+  ui.timer_left_s = 30;
+  draw_screen(fb, Screen::Timer, ui, 0);
+  bool any_red = false;
+  for (int y = 0; y < kHeight; ++y)
+    for (int x = 0; x < kWidth; ++x) {
+      const RGB c = fb.get(x, y);
+      if (c.lit() && c.r > 200 && c.g < 80) any_red = true;
+    }
+  CHECK(any_red);
+  CHECK(lit_calm > 0);
+
+  CASE("a paused timer blinks and a running one does not");
+  ui.timer_left_s = 10 * 60;
+  ui.timer_running = false;
+  Framebuffer p1, p2;
+  draw_screen(p1, Screen::Timer, ui, 0);     // blink phase on
+  draw_screen(p2, Screen::Timer, ui, 500);   // blink phase off
+  bool blinks = false;
+  for (int y = 0; y < kHeight && !blinks; ++y)
+    for (int x = 0; x < kWidth && !blinks; ++x)
+      if (!(p1.get(x, y) == p2.get(x, y))) blinks = true;
+  CHECK(blinks);
+
+  CASE("the brightness screen tracks the value");
+  ui.brightness = 255;
+  draw_screen(fb, Screen::Brightness, ui, 0);
+  int on_full = 0;
+  for (int x = 0; x < kWidth; ++x) on_full += (fb.get(x, 7) == ui.accent) ? 1 : 0;
+  CHECK_EQ(on_full, kWidth);
+
+  ui.brightness = 0;
+  draw_screen(fb, Screen::Brightness, ui, 0);
+  int on_zero = 0;
+  for (int x = 0; x < kWidth; ++x) on_zero += (fb.get(x, 7) == ui.accent) ? 1 : 0;
+  CHECK_EQ(on_zero, 0);
+  // The empty part of the bar keeps a dim track, so it still reads as a bar
+  // at zero rather than as a dead panel.
+  CHECK(fb.get(0, 7).lit());
+
+  CASE("the colour picker puts its cursor where the hue says");
+  ui.hue = 0.0f;
+  draw_screen(fb, Screen::ColorPick, ui, 0);
+  CHECK(fb.get(0, 7) == RGB(255, 255, 255));
+  ui.hue = 1.0f;
+  draw_screen(fb, Screen::ColorPick, ui, 0);
+  CHECK(fb.get(kWidth - 1, 7) == RGB(255, 255, 255));
+
+  CASE("sleep shows one dim pixel and nothing else");
+  draw_screen(fb, Screen::Sleep, ui, 0);
+  CHECK_EQ(lit_count(fb), 1);
+  CHECK(fb.get(0, kHeight - 1).r < 20);
+
+  CASE("screen names round-trip to something printable");
+  for (int i = 0; i < static_cast<int>(Screen::Count); ++i) {
+    const char* n = screen_name(static_cast<Screen>(i));
+    CHECK(n != nullptr && n[0] != '?');
+  }
+}
+
 int main() {
   std::printf("panel tests\n");
   test_mapping_is_bijective();
@@ -408,6 +589,7 @@ int main() {
   test_color();
   test_render_order_and_power();
   test_engine();
+  test_screens();
   std::printf("%d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;
 }

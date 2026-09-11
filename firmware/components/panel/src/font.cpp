@@ -170,6 +170,19 @@ int draw_text(Framebuffer& fb, int x, int y, const char* s, RGB color) {
   return cx - x;
 }
 
+int text_ink_width(const char* s) {
+  const int w = measure_text(s);
+  return w > 0 ? w - kCharGap : 0;  // the last character's gap is not ink
+}
+
+bool text_fits(const char* s) { return text_ink_width(s) <= kWidth; }
+
+int draw_text_centered(Framebuffer& fb, int y, const char* s, RGB color) {
+  const int x = (kWidth - text_ink_width(s)) / 2;
+  panel::draw_text(fb, x, y, s, color);
+  return x;
+}
+
 const uint8_t* tiny_digit(char c) {
   if (c < '0' || c > '9') return nullptr;
   return kTiny[c - '0'];
