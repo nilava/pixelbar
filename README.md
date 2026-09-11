@@ -30,16 +30,33 @@ encoder knob is on the top edge at the right.
 | Input | Action |
 | --- | --- |
 | Left zone, tap | FREE ↔ BUSY |
+| Left zone, double-tap | CALL |
 | Left zone, hold | CALL |
 | Middle zone, tap | Start or pause the focus timer |
 | Middle zone, hold | Reset the timer to its set length |
-| Right zone, tap | Cycle the view: status → clock → timer |
+| Right zone, tap | Next view: status → clock → timer |
 | Right zone, hold | DND on or off |
-| Knob, turn | Brightness, or the value on an adjust screen |
-| Knob, press | Step through the adjust screens: brightness → colour → timer length |
-| Knob, hold | Sleep or wake |
-| Double-tap the case | Same as a tap on the left zone |
+| Left and right together | Sleep or wake |
+| Swipe across the zones | Next or previous view |
+| Knob, turn | The value on this screen, or the view at rest |
+| Knob, press | Confirm, or step to the next adjuster |
+| Knob, double-press | Back to the home view |
+| Knob, hold | Open the menu |
+| Knob, press and turn | Brightness, from anywhere |
+| Double-tap the case | FREE ↔ BUSY |
+| Shake | Back out |
 | Lay the panel flat | Sleep |
+
+A tap never waits to find out whether it is going to become a double tap:
+holding it back for the 280 ms that would take puts the delay on the most-used
+gesture on the device. The first tap fires at once and the second *supersedes*
+it, which works because the actions behind them are assignments — BUSY, then
+CALL — rather than steps.
+
+Telling a chord from a swipe is the awkward one, because a finger dragged
+across the pads lights two at once as well. Timing cannot separate them: for the
+first hundred milliseconds a brisk swipe and a two-finger press are identical.
+What separates them is that a chord is *held* and a drag is not.
 
 The status words are each 23 px wide in the proportional font, so they sit
 still and centred rather than scrolling. Anything wider than the panel scrolls
@@ -50,10 +67,31 @@ columns, so a status word never scrolls. FREE is an open ring and BUSY is the
 same ring filled in, which is what makes the change between them read as the
 ring solidifying.
 
+That layout has 15 columns for the word, and AWAY, FOCUS, LUNCH and MEET are
+wider than that. Rather than scroll them, those statuses drop the icon and take
+the whole panel as a **badge**: a filled field in the status colour with the
+word cut out of it in black. Colour carries the meaning, so no picture is
+needed, and it reads from much further away because the lit area is three times
+larger. The two layouts turn over into each other without either knowing which
+the other is.
+
+The badge fill is held below full value on purpose. A full-width field lights
+about 150 LEDs where the icon layout lights 48, and at full value the brighter
+statuses draw past the 2500 mA cap — which the renderer would handle by scaling
+*those statuses only*, so changing status would visibly change how bright the
+panel is.
+
 | | |
 | --- | --- |
 | ![free](docs/anim/status-free.gif) | ![call](docs/anim/status-call.gif) |
+| ![focus](docs/anim/status-focus.gif) | ![lunch](docs/anim/status-lunch.gif) |
+| ![menu](docs/anim/menu.gif) | ![status picker](docs/anim/statuspick.gif) |
 | ![timer](docs/anim/timer.gif) | ![colour picker](docs/anim/colorpick.gif) |
+
+Holding the knob opens a menu, which scrolls like the view cycle does. The
+status picker shows each status *as the panel would show it* rather than as a
+row about it, so what you are scrolling through is a preview of what the room
+will see.
 
 Elements change in place rather than moving across the panel. A digit turns
 over like the face of a counter wheel — both faces on screen for the whole

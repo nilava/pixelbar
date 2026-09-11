@@ -287,11 +287,18 @@ int selftest() {
       {"tap right: clock", "d", 1.2f},
       {"swipe right: timer", "e", 1.5f},
       {"tap middle: running", "s", 0.6f},
-      {"hold the knob: brightness", "m", 1.5f},
+      {"hold the knob: the menu", "m", 1.6f},
+      {"turn to DISP", ">>", 1.2f},
+      {"press: brightness", " ", 1.4f},
       {"turn it up", ">>>>", 1.0f},
-      {"press: colour", " ", 1.2f},
+      {"press: colour", " ", 1.4f},
       {"turn the hue", ">>>>>>", 1.0f},
-      {"chord left+right: sleep", "AD", 1.5f},
+      {"double press: home", "  ", 1.4f},
+      {"menu, then STAT", "m", 1.6f},
+      {"press: the picker", " ", 1.4f},
+      {"scroll to a badge status", ">>>>", 1.4f},
+      {"press: claimed", " ", 1.8f},
+      {"chord left+right: sleep", "AD", 1.8f},
   };
 
   SimPorts ports;
@@ -325,7 +332,7 @@ int selftest() {
         case 'A': ports.toggle_hold(0); break;
         case 'D': ports.toggle_hold(2); break;
         case 'e': ports.drag(+1); break;
-        case '>': ports.turn(+5); break;
+        case '>': ports.turn(+1); break;
         case ' ': ports.press(); break;
         case 'm': ports.press(60); break;
         default: break;
@@ -391,7 +398,7 @@ int main(int argc, char** argv) {
         case ',': ports.turn(-1); break;
         case '.': ports.turn(+1); break;
         case '<': ports.turn(-5); break;
-        case '>': ports.turn(+5); break;
+        case '>': ports.turn(+1); break;
         case ' ': ports.press(); break;
         case 'p': ports.toggle_knob(); break;
         case 'm': ports.press(60); break;  // 600 ms, past the hold threshold

@@ -287,6 +287,9 @@ struct Clip {
   TransitionKind kind = TransitionKind::None;
   // For a dissolve, the status the panel changes to at the same moment.
   Status status_after = Status::Count;
+  // Walk a list screen, one entry every `scroll_every` seconds, with the disk
+  // transition the real thing uses.
+  float scroll_every = 0.0f;
 };
 
 void render_clip(const Clip& c, const std::string& dir) {
@@ -321,6 +324,7 @@ void render_clip(const Clip& c, const std::string& dir) {
   FrameClock clock;
   micros_t t = 0;
   bool fired = false;
+  float next_scroll = c.scroll_every;
   for (int i = 0; i < frames; ++i) {
     const float secs = static_cast<float>(i) / kAnimFps;
     if (!fired && c.go_at >= 0.0f && secs >= c.go_at) {
@@ -337,6 +341,20 @@ void render_clip(const Clip& c, const std::string& dir) {
       }
       if (c.status_after != Status::Count) ui.status = c.status_after;
     }
+    // Walk a list, exactly as the model does: change the index only after the
+    // manager has been told what it is leaving.
+    if (c.scroll_every > 0.0f && secs >= next_scroll) {
+      next_scroll += c.scroll_every;
+      mgr.restart_with(ui, TransitionKind::DiskUp,
+                       transition_seconds(TransitionKind::DiskUp));
+      if (c.screen == Screen::Menu) {
+        ui.menu_index = static_cast<uint8_t>((ui.menu_index + 1) % kMenuCount);
+      } else {
+        ui.pick = static_cast<Status>((static_cast<int>(ui.pick) + 1) %
+                                      static_cast<int>(Status::Count));
+      }
+    }
+
     // A live second hand and a counting timer, so the clips show real motion.
     ui.second = static_cast<int>(secs) % 60;
     ui.timer_left_s = 25 * 60 - static_cast<int>(secs * 30.0f);
@@ -381,6 +399,14 @@ void render_all_clips(const std::string& dir) {
       {"status-busy", Screen::Status, Status::Busy, 3.0f},
       {"status-call", Screen::Status, Status::Call, 3.0f},
       {"status-dnd", Screen::Status, Status::Dnd, 3.0f},
+      // A badge status: the word too wide for the label box, knocked out of a
+      // full-width field of its own colour.
+      {"status-focus", Screen::Status, Status::Focus, 3.0f},
+      {"status-lunch", Screen::Status, Status::Lunch, 3.0f},
+      {"menu", Screen::Menu, Status::Free, 6.0f, Screen::Count, -1.0f,
+       TransitionKind::None, Status::Count, 1.2f},
+      {"statuspick", Screen::StatusPick, Status::Free, 8.0f, Screen::Count, -1.0f,
+       TransitionKind::None, Status::Count, 1.0f},
       {"clock", Screen::Clock, Status::Free, 4.0f},
       {"timer", Screen::Timer, Status::Busy, 4.0f},
       {"colorpick", Screen::ColorPick, Status::Free, 4.0f},

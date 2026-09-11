@@ -390,9 +390,13 @@ static void test_engine() {
 
 static void test_screens() {
   CASE("every status word fits without scrolling");
+  // In the 5x7 face, which is what the marquee uses. Only the statuses that
+  // keep the icon-and-label layout have to clear this bar; the longer ones are
+  // drawn as a badge in the 3x5 face and are checked against that box instead.
   for (int i = 0; i < static_cast<int>(Status::Count); ++i) {
-    const char* label = status_label(static_cast<Status>(i));
-    CHECK(text_fits(label));
+    const Status st = static_cast<Status>(i);
+    if (status_uses_badge(st)) continue;
+    CHECK(text_fits(status_label(st)));
   }
   CHECK_EQ(text_ink_width("BUSY"), 23);  // 23 of the 24 columns
   CHECK(text_fits("BUSY"));
@@ -575,6 +579,67 @@ static void test_screens() {
   draw_screen(fb, Screen::ColorPick, ui, 0);
   const RGB cur = fb.get(kWidth / 2, 7);
   CHECK(cur.r == cur.g && cur.g == cur.b);
+
+  CASE("every menu label fits beside its icon");
+  for (int i = 0; i < kMenuCount; ++i) {
+    CHECK(kMenu[i].icon != nullptr);
+    CHECK(kMenu[i].label != nullptr);
+    CHECK(mini_text_fits(kMenu[i].label));
+  }
+
+  CASE("the menu draws something for every entry, and stays on the panel");
+  for (int i = 0; i < kMenuCount; ++i) {
+    UiState mu;
+    mu.menu_index = static_cast<uint8_t>(i);
+    ScreenAnim ma;
+    Anim man;
+    man.dt = 0.01f;
+    man.t = 1.0;
+    Framebuffer mfb;
+    draw_screen(mfb, Screen::Menu, mu, man, ma);
+    CHECK(lit_count(mfb) > 4);
+    CHECK(mfb.estimate_ma(255) < kMaxMilliamps);
+    // Column 8 is the gutter between the icon and the label and is never
+    // written, on any screen that uses this layout.
+    for (int y = 0; y < 7; ++y) CHECK(!mfb.get(kGutterX, y).lit());
+  }
+
+  CASE("an out-of-range menu index falls back rather than reading past the table");
+  {
+    UiState mu;
+    mu.menu_index = 200;
+    ScreenAnim ma;
+    Anim man;
+    man.dt = 0.01f;
+    Framebuffer mfb;
+    draw_screen(mfb, Screen::Menu, mu, man, ma);
+    CHECK(lit_count(mfb) > 4);
+  }
+
+  CASE("no status trips the power cap, whichever layout it uses");
+  {
+    // A full-width badge lights three times the LEDs an icon layout does. If a
+    // status went over the cap the renderer would scale that one status and not
+    // the others, so changing status would change how bright the whole panel
+    // looks — which reads as a fault, not as a safety feature working.
+    for (int i = 0; i < static_cast<int>(Status::Count); ++i) {
+      UiState st_ui;
+      st_ui.status = static_cast<Status>(i);
+      ScreenAnim st_anim;
+      Anim st_a;
+      st_a.dt = 0.01f;
+      Framebuffer st_fb;
+      float peak = 0.0f;
+      for (int k = 0; k < 200; ++k) {
+        st_a.t = k * 0.02;
+        st_fb.clear();
+        draw_screen(st_fb, Screen::Status, st_ui, st_a, st_anim);
+        const float ma = st_fb.estimate_ma(255);
+        if (ma > peak) peak = ma;
+      }
+      CHECK(peak < kMaxMilliamps);
+    }
+  }
 
   CASE("sleep is dim but actually reaches the LEDs");
   draw_screen(fb, Screen::Sleep, ui, 0);
@@ -770,9 +835,16 @@ static void test_mini_font() {
   CHECK_EQ(mini_text_ink_width("DND"), 11);
   CHECK_EQ(mini_text_ink_width(""), 0);
 
-  CASE("every status label fits beside its icon");
+  CASE("every status label fits the layout it says it uses");
   for (int i = 0; i < static_cast<int>(Status::Count); ++i) {
-    CHECK(mini_text_fits(status_label(static_cast<Status>(i))));
+    const Status st = static_cast<Status>(i);
+    const char* label = status_label(st);
+    if (status_uses_badge(st)) {
+      // A badge has the whole panel, less a pixel of padding either side.
+      CHECK(mini_text_ink_width(label) <= kWidth - 2);
+    } else {
+      CHECK(mini_text_fits(label));
+    }
   }
 
   CASE("the whole alphabet has a glyph and a sane width");

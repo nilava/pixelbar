@@ -101,7 +101,7 @@ void draw_sprite_scaled(Framebuffer& fb, const Sprite& s, float cx, float cy,
 
 void draw_sprite_rotated(Framebuffer& fb, const Sprite& s, float cx, float cy,
                          float turns, RGB color, float bright, float scale,
-                         Blend b) {
+                         Blend b, int clip_x0, int clip_x1) {
   if (!s.rows || s.w == 0 || s.h == 0 || bright <= 0.0f) return;
   if (scale <= 0.0f) return;
 
@@ -116,10 +116,13 @@ void draw_sprite_rotated(Framebuffer& fb, const Sprite& s, float cx, float cy,
   const int x0 = floor_i(cx - radius), x1 = floor_i(cx + radius);
   const int y0 = floor_i(cy - radius), y1 = floor_i(cy + radius);
 
+  if (clip_x0 < 0) clip_x0 = 0;
+  if (clip_x1 > kWidth) clip_x1 = kWidth;
+
   for (int py = y0; py <= y1; ++py) {
     if (py < 0 || py >= kHeight) continue;
     for (int px = x0; px <= x1; ++px) {
-      if (px < 0 || px >= kWidth) continue;
+      if (px < clip_x0 || px >= clip_x1) continue;
       // Inverse-map the pixel centre into source space.
       const float dx = (static_cast<float>(px) + 0.5f - cx) * inv;
       const float dy = (static_cast<float>(py) + 0.5f - cy) * inv;
@@ -230,7 +233,8 @@ void draw_icon_scaled(Framebuffer& fb, int x, int y, const Icon& ic, RGB color,
 }
 
 void mini_draw_text_squashed(Framebuffer& fb, int x0, int box_w, int y,
-                             const char* str, RGB color, float sy, float bright) {
+                             const char* str, RGB color, float sy, float bright,
+                             Blend b) {
   if (!str || sy <= 0.0f || bright <= 0.0f) return;
   const int ink = mini_text_ink_width(str);
   int x = x0 + (box_w - ink) / 2;
@@ -244,7 +248,7 @@ void mini_draw_text_squashed(Framebuffer& fb, int x0, int box_w, int y,
     }
     const Sprite s = sprite_of(*g);
     draw_sprite_scaled(fb, s, static_cast<float>(x) + g->w * 0.5f, cy, 1.0f, sy,
-                       color, bright, 0, kHeight, Ink::Normalised, Blend::Add);
+                       color, bright, 0, kHeight, Ink::Normalised, b);
     x += g->w + kMiniGap;
   }
 }

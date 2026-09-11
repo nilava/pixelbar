@@ -79,6 +79,7 @@ class App {
 
  private:
   void push(panel::Screen s, panel::TransitionKind k);
+  void enter_menu_entry();
   void pop();
   void go_home();
   void goto_view(int index);

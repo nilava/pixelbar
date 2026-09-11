@@ -207,6 +207,35 @@ void App::goto_view(int index) {
   mgr_.go_to(kHomeViews[view_], ui_, k, panel::transition_seconds(k));
 }
 
+void App::enter_menu_entry() {
+  const int n = panel::kMenuCount;
+  int i = ui_.menu_index;
+  if (i < 0 || i >= n) i = 0;
+  // Matched on the label rather than the index, so reordering the menu cannot
+  // silently point an entry at the wrong screen.
+  const char* label = panel::kMenu[i].label;
+  auto is = [&](const char* w) {
+    const char* a = label;
+    while (*a && *w && *a == *w) { ++a; ++w; }
+    return *a == 0 && *w == 0;
+  };
+  if (is("STAT")) {
+    ui_.pick = ui_.status;
+    push(Screen::StatusPick, TransitionKind::WipeUp);
+  } else if (is("TIME")) {
+    adjust_ = 2;  // TimerSet
+    push(kAdjustViews[2], TransitionKind::WipeUp);
+  } else if (is("DISP")) {
+    adjust_ = 0;  // Brightness, then the knob steps on to colour
+    push(kAdjustViews[0], TransitionKind::WipeUp);
+  } else {
+    // SYS has nothing behind it yet. Acknowledge rather than ignore: silence
+    // reads as a button that did not work.
+    mgr_.restart_with(ui_, TransitionKind::Ignite,
+                      panel::transition_seconds(TransitionKind::Ignite));
+  }
+}
+
 void App::set_status(Status s) {
   if (ui_.status == s) return;
   // A status change is the event this device exists for, so it takes the whole
@@ -270,6 +299,27 @@ void App::adjust(int detents, float rate) {
       note_change();
       break;
     }
+    case Screen::Menu: {
+      // The list scrolls by changing the index and restarting the screen with a
+      // disk transition. The outgoing frame still holds the previous entry,
+      // which is the whole reason restart_with takes the state being left.
+      const int n = panel::kMenuCount;
+      int next = wrap_index(static_cast<int>(ui_.menu_index) + (d > 0 ? 1 : -1), n);
+      const TransitionKind k = d > 0 ? TransitionKind::DiskUp : TransitionKind::DiskDown;
+      mgr_.restart_with(ui_, k, panel::transition_seconds(k));
+      ui_.menu_index = static_cast<uint8_t>(next);
+      break;
+    }
+
+    case Screen::StatusPick: {
+      const int n = static_cast<int>(Status::Count);
+      const int next = wrap_index(static_cast<int>(ui_.pick) + (d > 0 ? 1 : -1), n);
+      const TransitionKind k = d > 0 ? TransitionKind::DiskUp : TransitionKind::DiskDown;
+      mgr_.restart_with(ui_, k, panel::transition_seconds(k));
+      ui_.pick = static_cast<Status>(next);
+      break;
+    }
+
     default:
       // At rest the knob moves through the home views.
       if (d > 0) {
@@ -375,8 +425,16 @@ void App::handle(const Event& e, double now_s) {
     }
 
     case EventType::Press:
-      if (depth_ > 1) {
-        // Step through the adjust screens, then back out the far end.
+      if (screen() == Screen::Menu) {
+        enter_menu_entry();
+      } else if (screen() == Screen::StatusPick) {
+        // Pressing commits what you were previewing, and the claim animation
+        // plays on the way back out.
+        const Status chosen = ui_.pick;
+        go_home();
+        set_status(chosen);
+      } else if (depth_ > 1) {
+        // Inside an adjuster: step to the next one, then back out the far end.
         adjust_ = adjust_ + 1;
         if (adjust_ >= kAdjustViewCount) {
           adjust_ = 0;
@@ -399,8 +457,8 @@ void App::handle(const Event& e, double now_s) {
 
     case EventType::PressHoldBegin:
       if (depth_ == 1) {
-        adjust_ = 0;
-        push(kAdjustViews[0], TransitionKind::WipeUp);
+        ui_.menu_index = 0;
+        push(Screen::Menu, TransitionKind::WipeUp);
       } else {
         go_home();
       }

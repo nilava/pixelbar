@@ -22,6 +22,12 @@ const char* status_label(Status s) {
     case Status::Busy: return "BUSY";
     case Status::Call: return "CALL";
     case Status::Dnd: return "DND";
+    case Status::Away: return "AWAY";
+    case Status::Focus: return "FOCUS";
+    case Status::Lunch: return "LUNCH";
+    // MEETING measures 27 px and will not fit the panel at all, let alone the
+    // label box. Shortened rather than scrolled.
+    case Status::Meet: return "MEET";
     default: return "?";
   }
 }
@@ -32,6 +38,10 @@ RGB status_color(Status s) {
     case Status::Busy: return RGB(255, 30, 15);
     case Status::Call: return RGB(255, 120, 0);
     case Status::Dnd: return RGB(190, 0, 130);
+    case Status::Away: return RGB(60, 110, 210);
+    case Status::Focus: return RGB(140, 60, 255);
+    case Status::Lunch: return RGB(255, 160, 30);
+    case Status::Meet: return RGB(0, 175, 185);
     default: return RGB(120, 120, 120);
   }
 }
@@ -57,6 +67,8 @@ const char* screen_name(Screen s) {
     case Screen::Status: return "status";
     case Screen::Clock: return "clock";
     case Screen::Timer: return "timer";
+    case Screen::Menu: return "menu";
+    case Screen::StatusPick: return "statuspick";
     case Screen::Brightness: return "brightness";
     case Screen::ColorPick: return "colorpick";
     case Screen::TimerSet: return "timerset";
@@ -143,6 +155,105 @@ const Icon& status_icon(Status s) {
 
 RGB accent_from_hue(float hue) { return hsv(clamp01(hue), 1.0f, 1.0f); }
 
+bool status_uses_badge(Status s) { return !mini_text_fits(status_label(s)); }
+
+// Every label clears the 15 px box beside the icon, so none of them scroll.
+// Four characters is not the rule, though — M and W are five columns wide in
+// this font, so MOVE measures 17 and does not fit while APPS at four does.
+// TILT and TAP are the versions that fit, and a test checks the whole table
+// rather than trusting the next entry to be measured by hand.
+// Only entries that go somewhere. The icons for APPS, TILT, TAP and NET are
+// drawn and waiting in icons.h, but a menu row that does nothing when you press
+// it is worse than a short menu: it teaches you that pressing does not work.
+// Each arrives with the feature behind it.
+const MenuEntry kMenu[] = {
+    {&kIconBusy, "STAT", RGB(255, 30, 15), false},
+    {&kIconHourglass, "TIME", RGB(255, 138, 31), false},
+    {&kIconDisplay, "DISP", RGB(255, 200, 60), false},
+    {&kIconGear, "SYS", RGB(255, 120, 0), true},
+};
+const int kMenuCount = static_cast<int>(sizeof(kMenu) / sizeof(kMenu[0]));
+
+void draw_badge(Framebuffer& fb, int x0, int y0, int w, int h, RGB fill) {
+  if (w <= 0 || h <= 0) return;
+  for (int y = y0; y < y0 + h; ++y) {
+    for (int x = x0; x < x0 + w; ++x) {
+      // Drop the four corners. At eight rows that is the whole of what a
+      // corner radius can express, and it is enough: a square-cornered block
+      // reads as a rendering mistake, a clipped one reads as a shape.
+      const bool corner = (x == x0 || x == x0 + w - 1) && (y == y0 || y == y0 + h - 1);
+      if (corner) continue;
+      fb.set(x, y, fill);
+    }
+  }
+}
+
+void draw_badge_aa(Framebuffer& fb, float top, float bottom, RGB fill) {
+  if (bottom <= top) return;
+  const int first = static_cast<int>(std::floor(top));
+  const int last = static_cast<int>(std::ceil(bottom)) - 1;
+  for (int y = 0; y < kHeight; ++y) {
+    const float lo = top > static_cast<float>(y) ? top : static_cast<float>(y);
+    const float hi = bottom < static_cast<float>(y + 1) ? bottom : static_cast<float>(y + 1);
+    const float cov = hi - lo;
+    if (cov <= 0.0f) continue;
+    for (int x = 0; x < kWidth; ++x) {
+      const bool corner = (x == 0 || x == kWidth - 1) && (y == first || y == last);
+      if (corner) continue;
+      fb.blend(x, y, fill, cov);
+    }
+  }
+}
+
+void draw_badge_label(Framebuffer& fb, int y0, int h, const char* s, RGB fill) {
+  draw_badge(fb, 0, y0, kWidth, h, fill);
+  // The word is cut out rather than drawn on: black glyphs written over the
+  // fill with set(), not add(). Centred in the whole panel, because with the
+  // badge there is no icon competing for the left eight columns.
+  const int ty = y0 + (h - kMiniH) / 2;
+  mini_draw_text_centered(fb, 0, kWidth, ty, s, RGB(0, 0, 0));
+}
+
+
+// Draws one status at a given vertical scale and brightness, in whichever
+// layout its label needs.
+//
+// Two layouts have to be able to turn over into each other, because BUSY uses
+// an icon and FOCUS uses a badge, and you can go straight from one to the
+// other. Keeping them behind one call is what makes that a non-event: the swap
+// code never learns which is which.
+void draw_status_face(Framebuffer& fb, Status st, RGB c, const Anim& a, float sy,
+                      float bright, bool animate) {
+  if (sy <= 0.0f || bright <= 0.0f) return;
+  const char* label = status_label(st);
+
+  if (status_uses_badge(st)) {
+    // The badge collapses about the same centre its label does, so the two
+    // stay locked together all the way down.
+    const float mid = kBadgeTop + kBadgeRows * 0.5f;
+    const float half = kBadgeRows * 0.5f * sy;
+    draw_badge_aa(fb, mid - half, mid + half,
+                  c.scaled(static_cast<uint8_t>(bright * kBadgeFill * 255.0f + 0.5f)));
+    mini_draw_text_squashed(fb, 0, kWidth, kBadgeTextY, label, RGB(0, 0, 0), sy,
+                            1.0f, Blend::Over);
+    return;
+  }
+
+  if (sy >= 0.999f && bright >= 0.999f) {
+    if (animate && st == Status::Call) {
+      draw_anim_icon(fb, kIconX, 0, kAnimCall, a.t, c);
+    } else {
+      draw_icon(fb, kIconX, 0, status_icon(st), c);
+    }
+    mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, label, c);
+    return;
+  }
+  // The icon shrinks in both axes; the label only squashes vertically, so the
+  // word stays legible for longer than the picture does.
+  draw_icon_scaled(fb, kIconX, 0, status_icon(st), c, sy, sy, bright);
+  mini_draw_text_squashed(fb, kLabelX, kMiniLabelBox, 1, label, c, sy, bright);
+}
+
 void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
                  ScreenAnim& sa) {
   fb.clear();
@@ -182,31 +293,19 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       const float u = sa.swap.u(a.t);
 
       if (u >= 1.0f) {
-        if (urgent) {
-          draw_anim_icon(fb, kIconX, 0, kAnimCall, a.t, lit);
-        } else {
-          draw_icon(fb, kIconX, 0, status_icon(ui.status), lit);
-        }
-        mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1,
-                                status_label(ui.status), lit);
+        draw_status_face(fb, ui.status, lit, a, 1.0f, 1.0f, true);
       } else {
-        // The icon shrinks into itself in both axes; the label only squashes
-        // vertically, so the word stays legible for most of the exchange.
         const float out = pop_out_scale(u), in = pop_in_scale(u);
-        const RGB was_c = status_color(sa.was);
-        if (out > 0.0f) {
-          draw_icon_scaled(fb, kIconX, 0, status_icon(sa.was), was_c, out, out, out);
-          mini_draw_text_squashed(fb, kLabelX, kMiniLabelBox, 1,
-                                  status_label(sa.was), was_c, out, out);
-        }
+        if (out > 0.0f)
+          draw_status_face(fb, sa.was, status_color(sa.was), a, out, out, false);
         if (in > 0.0f) {
           const float b = in > 1.0f ? 1.0f : in;
-          draw_icon_scaled(fb, kIconX, 0, status_icon(sa.shown), lit, in, in, b);
-          mini_draw_text_squashed(fb, kLabelX, kMiniLabelBox, 1,
-                                  status_label(sa.shown), lit, in, b);
+          draw_status_face(fb, sa.shown, lit, a, in, b, false);
         }
       }
-      sheen(fb, a, 7, kLabelX, kWidth - 1, c, 6.0f);
+      // The sheen travels the label area, which only exists in the icon
+      // layout. Over a filled badge it would read as a smudge on the colour.
+      if (!status_uses_badge(ui.status)) sheen(fb, a, 7, kLabelX, kWidth - 1, c, 6.0f);
       break;
     }
 
@@ -255,6 +354,62 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       draw_bar_aa(fb, kHeight - 1, kHeight - 1, shown, c.scaled(120), RGB(0, 0, 0));
       // A brighter head on the bar, so progress reads even when it barely moves.
       fb.set_aa(shown * kWidth - 0.5f, kHeight - 1, c, 0.8f, Blend::Add);
+      break;
+    }
+
+    case Screen::Menu: {
+      const int n = kMenuCount;
+      int idx = ui.menu_index;
+      if (idx < 0 || idx >= n) idx = 0;
+      const MenuEntry& e = kMenu[idx];
+
+      // The item breathes gently so a menu left open does not look frozen, and
+      // the one icon that means "machinery" turns while you look at it. That is
+      // the difference between an icon and a picture of an icon.
+      const float k = 0.86f + 0.14f * a.wave(3.2f);
+      const RGB lit = e.color.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
+      if (e.spins) {
+        draw_sprite_rotated(fb, sprite_of(*e.icon), kIconX + kIconW * 0.5f,
+                            kIconH * 0.5f, a.phase(6.0f), lit, 1.0f, 1.0f,
+                            Blend::Add, kIconX, kIconX + kIconW);
+      } else {
+        draw_icon(fb, kIconX, 0, *e.icon, lit);
+      }
+      // Grey rather than white. A label lights all three channels, and at 220
+      // the brightest entries went over the 2500 mA cap on their own — which
+      // would have dimmed some menu rows and not others as you scrolled.
+      mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, 1, e.label,
+                              RGB(140, 140, 140));
+
+      // Where you are in the list, as ticks along the bottom row. At eight
+      // entries and fifteen columns of label there is no room for a number, and
+      // a position you can see at a glance beats one you have to read.
+      const int span = kWidth - kLabelX;
+      for (int i = 0; i < n && i < span; ++i) {
+        const int x = kLabelX + (i * span) / n;
+        fb.set(x, 7, i == idx ? lit : e.color.scaled(30));
+      }
+      break;
+    }
+
+    case Screen::StatusPick: {
+      // Drawn as the status itself rather than as a row about it, so what you
+      // are scrolling through is a preview of what the room will see. The
+      // badge layouts and the icon layouts sit in one list without the picker
+      // needing to know which is which.
+      const RGB c = status_color(ui.pick);
+      const float k = 0.88f + 0.12f * a.wave(2.6f);
+      draw_status_face(fb, ui.pick, c.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f)),
+                       a, 1.0f, 1.0f, true);
+      // A cursor along the bottom, in the same place the menu puts one.
+      const int n = static_cast<int>(Status::Count);
+      const int here = static_cast<int>(ui.pick);
+      if (!status_uses_badge(ui.pick)) {
+        for (int i = 0; i < n && i < kWidth; ++i) {
+          const int x = (i * kWidth) / n;
+          fb.set(x, 7, i == here ? c : c.scaled(26));
+        }
+      }
       break;
     }
 

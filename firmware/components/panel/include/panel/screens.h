@@ -9,11 +9,19 @@
 #include "panel/color.h"
 #include "panel/digit_roll.h"
 #include "panel/framebuffer.h"
+#include "panel/icons.h"
 #include "panel/sprite.h"
 
 namespace panel {
 
-enum class Status : uint8_t { Free, Busy, Call, Dnd, Count };
+enum class Status : uint8_t {
+  // The four that fit beside an 8 px icon: their labels are 15 px or less.
+  Free, Busy, Call, Dnd,
+  // And the ones that do not. These take the whole panel as a knocked-out
+  // badge instead; see status_uses_badge.
+  Away, Focus, Lunch, Meet,
+  Count,
+};
 
 const char* status_label(Status s);
 RGB status_color(Status s);
@@ -22,10 +30,27 @@ RGB status_color(Status s);
 // a cursor over a hue it has no way to apply.
 RGB accent_from_hue(float hue);
 
+// The top-level menu: an icon and a word each, in the order they are shown.
+struct MenuEntry {
+  const Icon* icon;
+  const char* label;
+  RGB color;
+  bool spins;  // drawn through draw_sprite_rotated, so it turns while you look
+};
+extern const MenuEntry kMenu[];
+extern const int kMenuCount;
+
+// True when the label is too wide to sit beside an icon, so the status is
+// drawn as a full-width badge instead. Derived from the label's measured
+// width rather than listed, so adding a status cannot get this wrong.
+bool status_uses_badge(Status s);
+
 enum class Screen : uint8_t {
   Status,      // the room-facing default: one word, one colour
   Clock,
   Timer,       // focus countdown
+  Menu,        // the icon-and-label list, scrolled like a record
+  StatusPick,  // choosing a status: the same list, drawn as the status itself
   Brightness,  // encoder adjust
   ColorPick,   // encoder adjust
   TimerSet,    // encoder adjust
@@ -49,6 +74,15 @@ struct UiState {
   uint8_t brightness = 48;
   float hue = 0.08f;      // cursor position on the colour picker, 0..1
   int timer_set_min = 25;
+
+  // Which menu entry is under the cursor. The list scrolls by changing this
+  // and restarting the screen with a disk transition, so the outgoing frame
+  // still holds the previous entry — which is the whole reason go_to and
+  // restart_with take the state the panel is leaving.
+  uint8_t menu_index = 0;
+  // Which status the picker is sitting on, which is not the same as the status
+  // the panel is showing: you scroll past several before pressing one.
+  Status pick = Status::Free;
 
   // Wall clock and link state, filled in by the caller.
   int hour = 0;
@@ -98,6 +132,42 @@ void draw_pair_face(Framebuffer& fb, int left, int right, bool show_colon, RGB c
 
 // hh:mm in 3x5 digits, centred, with the colon shown when show_colon is set.
 void draw_clock_face(Framebuffer& fb, int hour, int minute, bool show_colon, RGB color);
+
+// A filled rounded rectangle: the corners are simply omitted, which at eight
+// rows is all a radius can mean.
+void draw_badge(Framebuffer& fb, int x0, int y0, int w, int h, RGB fill);
+
+// The full-width badge with sub-pixel top and bottom edges, so it can collapse
+// to nothing smoothly. Rounding the height to whole rows would step through
+// seven states in a fifth of a second, which is exactly the stepping the rest
+// of this pipeline exists to avoid.
+void draw_badge_aa(Framebuffer& fb, float top, float bottom, RGB fill);
+
+// Where a full-width badge sits: rows 0..6, so its centre lands at 3.5 —
+// the same centre a 5-row label at y = 1 has. Row 7 is left for a rail.
+constexpr int kBadgeTop = 0;
+constexpr int kBadgeRows = 7;
+constexpr int kBadgeTextY = 1;
+
+// The badge fill is held below full value on purpose.
+//
+// A full-width badge lights about 150 LEDs where the icon layout lights 48, and
+// at full value the brighter statuses draw over 3.2 A — past the 2500 mA cap.
+// The cap would handle it, but it would scale *only* the badge statuses, so
+// switching between BUSY and FOCUS would visibly change how bright the whole
+// panel is. Pulling the fill down here keeps every status under the cap and
+// therefore at a consistent brightness. It costs nothing to read: on a field
+// this large it is the area doing the work, not the intensity.
+constexpr float kBadgeFill = 0.85f;
+
+// The same, with a word cut out of it — the fill is drawn, then the glyphs are
+// written in black over the top.
+//
+// Colour carries the meaning here, not a picture, which is what lets a word too
+// wide for the 15 px label box fit anyway: the whole 24 columns are available
+// because nothing else is competing for them. It also reads from much further
+// away than ink on black does, because the lit area is twenty times larger.
+void draw_badge_label(Framebuffer& fb, int y0, int h, const char* s, RGB fill);
 
 // A horizontal bar across rows y0..y1 inclusive, filled left to right.
 void draw_bar(Framebuffer& fb, int y0, int y1, float fraction, RGB on, RGB off);

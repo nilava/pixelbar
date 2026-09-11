@@ -658,6 +658,24 @@ class AppRig {
   }
   void settle() { run(1.2f); }  // long enough for any transition to finish
 
+  // Hold the knob to open the menu, scroll to a labelled entry, press it.
+  void open_menu() { press(0.7f); settle(); }
+  void menu_to(const char* label) {
+    for (int guard = 0; guard < panel::kMenuCount + 1; ++guard) {
+      const int i = app.state().menu_index;
+      const char* here = panel::kMenu[i].label;
+      if (std::strcmp(here, label) == 0) return;
+      turn(1);
+      settle();
+    }
+  }
+  void enter(const char* label) {
+    open_menu();
+    menu_to(label);
+    press();
+    settle();
+  }
+
   TestPorts ports;
   App app;
 
@@ -803,12 +821,15 @@ void test_app_timer() {
 }
 
 void test_app_adjust() {
-  CASE("holding the knob opens the adjusters, and pressing steps through them");
+  CASE("holding the knob opens the menu; DISP leads to the adjusters");
   {
     AppRig r;
     CHECK_EQ(r.app.depth(), 1);
-    r.press(0.7f); r.settle();  // a press-hold
+    r.open_menu();
     CHECK_EQ(r.app.depth(), 2);
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Menu));
+    r.menu_to("DISP");
+    r.press(); r.settle();
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Brightness));
     r.press(); r.settle();
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::ColorPick));
@@ -822,7 +843,7 @@ void test_app_adjust() {
   CASE("turning on the brightness screen changes brightness, and clamps");
   {
     AppRig r;
-    r.press(0.7f); r.settle();
+    r.enter("DISP");
     const int before = r.app.state().brightness;
     r.turn(5); r.settle();
     CHECK(r.app.state().brightness > before);
@@ -835,8 +856,8 @@ void test_app_adjust() {
   CASE("the colour picker commits its hue to the accent");
   {
     AppRig r;
-    r.press(0.7f); r.settle();
-    r.press(); r.settle();  // to ColorPick
+    r.enter("DISP");
+    r.press(); r.settle();  // the knob steps on from brightness to colour
     const panel::RGB before = r.app.state().accent;
     r.turn(6); r.settle();
     const panel::RGB after = r.app.state().accent;
@@ -847,8 +868,8 @@ void test_app_adjust() {
   CASE("a shake backs out of an adjuster but does nothing at home");
   {
     AppRig r;
-    r.press(0.7f); r.settle();
-    CHECK_EQ(r.app.depth(), 2);
+    r.enter("DISP");
+    CHECK(r.app.depth() > 1);
     r.app.handle(Event(EventType::Shake), 0.0);
     r.settle();
     CHECK_EQ(r.app.depth(), 1);
@@ -912,7 +933,7 @@ void test_app_sleep_and_settings() {
   CASE("settings are written once a knob stops moving, not once per detent");
   {
     AppRig r;
-    r.press(0.7f); r.settle();
+    r.enter("DISP");
     r.ports.saves = 0;
     for (int i = 0; i < 20; ++i) r.turn(1);  // a sweep
     CHECK_EQ(r.ports.saves, 0);              // nothing yet
@@ -925,7 +946,7 @@ void test_app_sleep_and_settings() {
   CASE("what was saved comes back on the next boot");
   {
     AppRig r;
-    r.press(0.7f); r.settle();
+    r.enter("DISP");
     for (int i = 0; i < 10; ++i) r.turn(1);
     r.run(2.0f);
     const int saved = r.app.state().brightness;
@@ -985,6 +1006,86 @@ void test_app_sleep_and_settings() {
   }
 }
 
+
+void test_app_menu() {
+  CASE("the knob scrolls the menu, and it wraps");
+  {
+    AppRig r;
+    r.open_menu();
+    CHECK_EQ(r.app.state().menu_index, 0);
+    r.turn(1); r.settle();
+    CHECK_EQ(r.app.state().menu_index, 1);
+    for (int i = 0; i < panel::kMenuCount - 1; ++i) { r.turn(1); r.settle(); }
+    CHECK_EQ(r.app.state().menu_index, 0);   // all the way round
+    r.turn(-1); r.settle();
+    CHECK_EQ(r.app.state().menu_index, panel::kMenuCount - 1);
+  }
+
+  CASE("STAT opens the picker on the status you are actually showing");
+  {
+    AppRig r;
+    r.tap(0); r.settle();  // go BUSY first
+    r.enter("STAT");
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::StatusPick));
+    CHECK_EQ(static_cast<int>(r.app.state().pick),
+             static_cast<int>(panel::Status::Busy));
+  }
+
+  CASE("scrolling the picker previews without committing");
+  {
+    AppRig r;
+    r.enter("STAT");
+    const int shown = static_cast<int>(r.app.state().status);
+    r.turn(1); r.settle();
+    r.turn(1); r.settle();
+    CHECK(static_cast<int>(r.app.state().pick) != shown);
+    CHECK_EQ(static_cast<int>(r.app.state().status), shown);  // not yet
+  }
+
+  CASE("pressing in the picker commits it and returns home");
+  {
+    AppRig r;
+    r.enter("STAT");
+    r.turn(1); r.settle();
+    r.turn(1); r.settle();
+    const int picked = static_cast<int>(r.app.state().pick);
+    r.press(); r.settle();
+    CHECK_EQ(static_cast<int>(r.app.state().status), picked);
+    CHECK_EQ(r.app.depth(), 1);
+  }
+
+  CASE("every status in the picker can be reached by turning");
+  {
+    // The picker walks the whole enum, badge layouts and icon layouts alike,
+    // so a status that cannot be selected cannot be added by accident.
+    AppRig r;
+    r.enter("STAT");
+    bool seen[static_cast<int>(panel::Status::Count)] = {false};
+    for (int i = 0; i < static_cast<int>(panel::Status::Count) + 1; ++i) {
+      seen[static_cast<int>(r.app.state().pick)] = true;
+      r.turn(1);
+      r.settle();
+    }
+    for (int i = 0; i < static_cast<int>(panel::Status::Count); ++i) CHECK(seen[i]);
+  }
+
+  CASE("a menu entry with nothing behind it still acknowledges");
+  {
+    // Silence reads as a button that did not work, so the unfinished entry
+    // plays the claim animation rather than doing nothing at all.
+    AppRig r;
+    r.open_menu();
+    r.menu_to("SYS");
+    const int depth_before = r.app.depth();
+    r.press();
+    r.run(0.1f);
+    CHECK(r.app.busy());  // something is animating
+    r.settle();
+    CHECK_EQ(r.app.depth(), depth_before);
+  }
+}
+
 void test_nav_inverse() {
   CASE("every transition that has a direction knows how to come back");
   {
@@ -1015,6 +1116,7 @@ void run_ui_tests() {
   test_app_boot_and_views();
   test_app_status();
   test_app_timer();
+  test_app_menu();
   test_app_adjust();
   test_app_sleep_and_settings();
   test_nav_inverse();

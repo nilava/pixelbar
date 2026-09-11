@@ -68,9 +68,13 @@ void draw_sprite_scaled(Framebuffer& fb, const Sprite& s, float cx, float cy,
 // Inverse-mapped and bilinearly sampled: at 8x8 no rotation can be crisp, and
 // trying to keep it crisp is what makes a rotating icon strobe. Letting it go
 // soft between the cardinal angles is what sells the movement.
+// clip_x bounds the cell it is allowed to turn inside. A rotated 8x8 sweeps a
+// disc 11.3 px across, so without this a spinning icon reaches into the gutter
+// and the layout stops being eight columns of picture and fifteen of word.
 void draw_sprite_rotated(Framebuffer& fb, const Sprite& s, float cx, float cy,
                          float turns, RGB color, float bright = 1.0f,
-                         float scale = 1.0f, Blend b = Blend::Add);
+                         float scale = 1.0f, Blend b = Blend::Add,
+                         int clip_x0 = 0, int clip_x1 = kWidth);
 
 // ------------------------------------------------------------- the spin
 //
@@ -136,8 +140,11 @@ void draw_icon_scaled(Framebuffer& fb, int x, int y, const Icon& ic, RGB color,
 // where they are. Busy Bar's menu labels do exactly this while their icon
 // scales in both axes, and the asymmetry is what keeps the word readable for
 // longer than the picture.
+// Blend::Over with black is how a knocked-out word is squashed: adding black
+// to a filled badge does nothing, so the glyphs have to replace rather than
+// accumulate, coverage-weighted so the collapsing edge stays smooth.
 void mini_draw_text_squashed(Framebuffer& fb, int x0, int box_w, int y,
                              const char* s, RGB color, float sy,
-                             float bright = 1.0f);
+                             float bright = 1.0f, Blend b = Blend::Add);
 
 }  // namespace panel

@@ -57,7 +57,19 @@ extern const Icon kIconSunCore;
 extern const Icon kIconSunRays;
 extern const Icon kIconHourglass;      // the shell
 extern const Icon kIconHourglassTop;   // upper chamber, the sand that is left
-extern const Icon kIconHourglassBottom;// lower chamber, the sand that has fallen
+extern const Icon kIconHourglassBottom;  // lower chamber, the sand that has fallen
+
+// The menu set. One glyph per top-level entry.
+extern const Icon kIconGear;      // settings; rotates, see draw_sprite_rotated
+extern const Icon kIconGrid;      // scenes
+extern const Icon kIconDisplay;
+extern const Icon kIconHand;      // touch
+extern const Icon kIconMotion;
+extern const Icon kIconLock;
+extern const Icon kIconCross;
+extern const Icon kIconWarning;
+extern const Icon kIconDownload;
+extern const Icon kIconInfo;
 extern const AnimIcon kAnimWifi;   // arcs filling
 extern const StrokeIcon kStrokeCheck;
 

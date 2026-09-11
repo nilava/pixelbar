@@ -48,6 +48,137 @@ const Icon kIconDnd = {{
     IR(0,0,1,1,1,1,0,0),
 }};
 
+
+// ------------------------------------------------------- the menu set
+//
+// One 8x8 glyph per top-level menu entry. Drawn to read at a glance from across
+// a desk rather than to be admired up close: at this size a picture has about
+// twenty lit pixels to make its point with, so each of these leans on one
+// unmistakable silhouette instead of detail.
+
+// A gear. Deliberately symmetric about both axes with eight teeth, so that
+// rotating it through an eighth of a turn lands back on itself — which is what
+// lets draw_sprite_rotated spin it forever without the shape appearing to
+// wobble between frames.
+const Icon kIconGear = {{
+    IR(0,0,1,0,0,1,0,0),
+    IR(0,1,1,1,1,1,1,0),
+    IR(1,1,1,0,0,1,1,1),
+    IR(0,1,0,0,0,0,1,0),
+    IR(0,1,0,0,0,0,1,0),
+    IR(1,1,1,0,0,1,1,1),
+    IR(0,1,1,1,1,1,1,0),
+    IR(0,0,1,0,0,1,0,0),
+}};
+
+// Four blocks: the shape everything uses for "a set of things".
+const Icon kIconGrid = {{
+    IR(0,0,0,0,0,0,0,0),
+    IR(0,1,1,0,0,1,1,0),
+    IR(0,1,1,0,0,1,1,0),
+    IR(0,0,0,0,0,0,0,0),
+    IR(0,0,0,0,0,0,0,0),
+    IR(0,1,1,0,0,1,1,0),
+    IR(0,1,1,0,0,1,1,0),
+    IR(0,0,0,0,0,0,0,0),
+}};
+
+// A panel on a stand: the display settings.
+const Icon kIconDisplay = {{
+    IR(1,1,1,1,1,1,1,1),
+    IR(1,0,0,0,0,0,0,1),
+    IR(1,0,1,1,1,1,0,1),
+    IR(1,0,0,0,0,0,0,1),
+    IR(1,1,1,1,1,1,1,1),
+    IR(0,0,0,1,1,0,0,0),
+    IR(0,0,0,1,1,0,0,0),
+    IR(0,1,1,1,1,1,1,0),
+}};
+
+// A hand: the touch settings.
+const Icon kIconHand = {{
+    IR(0,0,1,0,0,0,0,0),
+    IR(0,1,1,1,0,1,0,0),
+    IR(0,1,1,1,1,1,1,0),
+    IR(0,1,1,1,1,1,1,0),
+    IR(1,1,1,1,1,1,1,0),
+    IR(1,1,1,1,1,1,1,0),
+    IR(0,1,1,1,1,1,1,0),
+    IR(0,0,1,1,1,1,0,0),
+}};
+
+// Waves radiating from a point: motion and gestures.
+const Icon kIconMotion = {{
+    IR(0,0,0,1,1,0,0,0),
+    IR(0,0,1,0,0,1,0,0),
+    IR(0,1,0,1,1,0,1,0),
+    IR(1,0,1,0,0,1,0,1),
+    IR(1,0,1,0,0,1,0,1),
+    IR(0,1,0,1,1,0,1,0),
+    IR(0,0,1,0,0,1,0,0),
+    IR(0,0,0,1,1,0,0,0),
+}};
+
+// A padlock, for the lock screen and the touch lock.
+const Icon kIconLock = {{
+    IR(0,0,1,1,1,1,0,0),
+    IR(0,1,1,0,0,1,1,0),
+    IR(0,1,0,0,0,0,1,0),
+    IR(1,1,1,1,1,1,1,1),
+    IR(1,1,1,1,1,1,1,1),
+    IR(1,1,1,0,0,1,1,1),
+    IR(1,1,1,1,1,1,1,1),
+    IR(1,1,1,1,1,1,1,1),
+}};
+
+// A cross, for anything that failed.
+const Icon kIconCross = {{
+    IR(0,0,0,0,0,0,0,0),
+    IR(0,1,1,0,0,1,1,0),
+    IR(0,1,1,1,1,1,1,0),
+    IR(0,0,1,1,1,1,0,0),
+    IR(0,0,1,1,1,1,0,0),
+    IR(0,1,1,1,1,1,1,0),
+    IR(0,1,1,0,0,1,1,0),
+    IR(0,0,0,0,0,0,0,0),
+}};
+
+// An exclamation inside a triangle: a warning.
+const Icon kIconWarning = {{
+    IR(0,0,0,1,1,0,0,0),
+    IR(0,0,0,1,1,0,0,0),
+    IR(0,0,1,1,1,1,0,0),
+    IR(0,0,1,0,0,1,0,0),
+    IR(0,1,1,0,0,1,1,0),
+    IR(0,1,1,1,1,1,1,0),
+    IR(1,1,1,0,0,1,1,1),
+    IR(1,1,1,1,1,1,1,1),
+}};
+
+// An arrow into a tray: an update arriving.
+const Icon kIconDownload = {{
+    IR(0,0,0,1,1,0,0,0),
+    IR(0,0,0,1,1,0,0,0),
+    IR(0,0,0,1,1,0,0,0),
+    IR(1,1,0,1,1,0,1,1),
+    IR(0,1,1,1,1,1,1,0),
+    IR(0,0,1,1,1,1,0,0),
+    IR(0,0,0,1,1,0,0,0),
+    IR(1,1,1,1,1,1,1,1),
+}};
+
+// A lower-case i in a ring: about.
+const Icon kIconInfo = {{
+    IR(0,0,1,1,1,1,0,0),
+    IR(0,1,0,0,0,0,1,0),
+    IR(1,0,0,1,1,0,0,1),
+    IR(1,0,0,0,0,0,0,1),
+    IR(1,0,0,1,1,0,0,1),
+    IR(1,0,0,1,1,0,0,1),
+    IR(0,1,0,1,1,0,1,0),
+    IR(0,0,1,1,1,1,0,0),
+}};
+
 namespace {
 // The handset never touches rows 1 and 2, which is where the ripples live.
 const Icon kCallFrames[4] = {
