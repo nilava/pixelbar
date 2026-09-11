@@ -65,6 +65,9 @@ class App {
 
   const panel::UiState& state() const { return ui_; }
   const Settings& settings() const { return set_; }
+  // What the render path should be allowed to draw. Passed through rather than
+  // read from a constant so the bench supply and the finished one both work.
+  float max_ma() const { return static_cast<float>(set_.max_ma); }
   panel::Screen screen() const { return nav_[depth_ - 1].screen; }
   int depth() const { return depth_; }
   bool asleep() const { return asleep_; }

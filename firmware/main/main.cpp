@@ -24,9 +24,11 @@ namespace {
 
 const char* TAG = "pixelbar";
 
-// Hold the mapping test at boot, long enough to watch the head sweep the
-// whole panel twice. Set to 0 once kWiring is confirmed against the hardware.
-constexpr int64_t kMapTestSeconds = 24;
+// Hold the mapping test at boot, long enough to watch the head sweep the whole
+// panel twice. Zero because kWiring is confirmed: it was taken from a WLED
+// setup running on this panel, which is the only evidence that settles it.
+// Pattern::MapTest is still there for whenever the wiring is in doubt again.
+constexpr int64_t kMapTestSeconds = 0;
 
 // One stop on the tour.
 struct Stop {
@@ -78,9 +80,11 @@ extern "C" void app_main(void) {
   int cur = 0;
 
   engine.set_pattern(panel::Pattern::MapTest);
-  ESP_LOGI(TAG, "mapping test for %llds: the white pixel should sweep left to "
-                "right along the top row, starting at the red marker",
-           static_cast<long long>(kMapTestSeconds));
+  if (kMapTestSeconds > 0) {
+    ESP_LOGI(TAG, "mapping test for %llds: the white pixel should sweep left to "
+                  "right along the top row, starting at the red marker",
+             static_cast<long long>(kMapTestSeconds));
+  }
 
   panel::UiState ui;
   ui.accent = panel::RGB(255, 138, 31);
@@ -149,12 +153,14 @@ extern "C" void app_main(void) {
 
     // ui.brightness, not the compile-time default: the Brightness screen was
     // a readout of a value that reached nothing.
+    // kBenchMilliamps while the prototype runs from a 2 A brick; this becomes
+    // the App's own setting once the input layer replaces the scripted tour.
     const panel::RenderStats st = renderer.render(fb, wire[cur], ui.brightness,
-                                                  panel::kMaxMilliamps, panel::kWiring);
+                                                  panel::kBenchMilliamps, panel::kWiring);
     if (st.power_scale < 1.0f && !warned_about_power) {
       warned_about_power = true;
       ESP_LOGW(TAG, "power cap active: scaling to %.0f%% to stay under %.0f mA",
-               st.power_scale * 100.0f, panel::kMaxMilliamps);
+               st.power_scale * 100.0f, panel::kBenchMilliamps);
     }
 
     // Wait for the previous frame only now, after all the drawing: its time on

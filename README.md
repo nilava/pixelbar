@@ -11,16 +11,19 @@ snap-fit printed case, behind a per-LED light grid and a diffuser.
 
 ## Status
 
-**The display layer is done, and it is animated.** Icons, a mini font, screen
-transitions and continuous motion at 100 fps, all unit tested on the host with
-the ESP32-C3 image building and ready to flash.
+**The display layer, the input model and the screen tree are done.** Icons, a
+mini font, transitions, flourishes and continuous motion at 100 fps; a gesture
+recogniser, a navigable menu and settings that persist. All of it unit tested
+on the host, drivable from a terminal, with the ESP32-C3 image building.
 
-None of it has run on real LEDs yet, because the boards are not built. The
-first job once they are is the mapping calibration below.
+The panel itself is wired and working — the LED mapping below was confirmed
+against it. None of *this* firmware has driven it yet, and the touch pads,
+encoder and accelerometer are not connected.
 
-Still to come, in order: reading the inputs and driving the state machine
-below, the MPU-6050, WiFi with a web page and OTA, the Mac helper that flips
-the panel to BUSY when your microphone opens, then Slack and calendar.
+Still to come, in order: the device input layer, moving the LED output from RMT
+to SPI+GDMA before any of the network work (see below), WiFi with a web page
+and OTA, then the Mac helper that flips the panel to BUSY when your microphone
+opens, and Slack and calendar after that.
 
 ## Controls and screens
 
@@ -211,23 +214,33 @@ idf.py build
 idf.py -p /dev/cu.usbmodem* flash monitor
 ```
 
-## Calibrating the LED mapping
+## The LED mapping
 
 How the LEDs are wired *inside* one 8×8 board varies between suppliers, so it
-is a config value rather than an assumption. On first flash the panel runs the
-mapping test for 24 seconds:
+is a config value rather than an assumption. For this panel it is settled,
+taken from a WLED setup running on the same hardware:
+
+| WLED | `kWiring` |
+| --- | --- |
+| 1st LED: Top / Left | `Corner::TopLeft` |
+| Orientation: Horizontal | `Axis::Row` |
+| Serpentine: unchecked | `serpentine = false` |
+| Panel offsets X = 0, 8, 16 | `chainRightToLeft = false` |
+
+The boards are **progressive, not serpentine**: every row runs left to right
+and the chain drops back to the left at the end of each one. The original guess
+here was serpentine, which is true of many 65 mm boards and not of these.
+
+For a different panel, `Pattern::MapTest` is still there — set `kMapTestSeconds`
+in `firmware/main/main.cpp` and watch:
 
 - a **red** pixel marks logical (0,0), the top-left corner
 - a **white** pixel walks the panel in logical order
 - **green** pixels on the bottom row mark the seams between boards
 
 The white pixel should sweep left to right along the top row, then drop to the
-next row. If it zig-zags, runs down columns, or starts in the wrong corner,
-edit `kWiring` in `firmware/components/panel/include/panel/config.h` and
-reflash. All sixteen combinations are covered by the tests, so any setting you
-pick is guaranteed to address all 192 LEDs exactly once.
-
-Once it is right, set `kMapTestSeconds` to 0 in `firmware/main/main.cpp`.
+next. All sixteen combinations are covered by the tests, so any setting you pick
+is guaranteed to address all 192 LEDs exactly once.
 
 ## Tests and preview, no hardware needed
 
@@ -274,8 +287,21 @@ The ambient patterns are still there as a screensaver.
 
 192 LEDs at full white would draw about 11 A, which no USB-C supply will give
 you. `Framebuffer::render` estimates the draw of every frame and scales it to
-stay under `kMaxMilliamps`, defaulting to 2500 mA on a 3 A supply. The cap is
-enforced in the render path, not in the patterns, so no pattern can exceed it.
+stay under a budget the caller passes in. The cap is enforced in the render
+path, not in the patterns, so nothing drawn can exceed it.
+
+The budget is a setting rather than a constant, because the panel has to be
+right on both the supply it is developed on and the one it ships against:
+2500 mA through the USB-C breakout from a 3 A source, and 1900 mA from the 2 A
+brick on the bench. Nothing in the drawing layer is tuned to one number — the
+heavy frames, a full-width status badge and the completion flash, are held
+under 2300 mA so that at the design target they never trip the cap at all,
+which is what keeps brightness consistent when you switch between screens. On
+the smaller supply the cap does engage, but not until about 85% brightness.
+
+The per-LED figure is 60 mA, the datasheet's three channels at 20. WLED uses a
+measured 55 for the same part, so this runs about 9% pessimistic — the right
+direction to be wrong in for a current estimate.
 
 ## Layout
 

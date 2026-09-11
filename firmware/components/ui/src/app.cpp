@@ -1,6 +1,7 @@
 #include "ui/app.h"
 
 #include "panel/anim.h"
+#include "panel/config.h"
 
 namespace ui {
 
@@ -43,6 +44,9 @@ void Settings::sanitise() {
   if (brightness < 4) brightness = 4;  // never so dim the panel looks dead
   if (hue < 0.0f || hue > 1.0f) hue = 0.08f;
   if (sleep_after_min > 720) sleep_after_min = 720;
+  if (max_ma < panel::kMinMilliamps) max_ma = static_cast<uint16_t>(panel::kMinMilliamps);
+  if (max_ma > panel::kMaxAllowedMilliamps)
+    max_ma = static_cast<uint16_t>(panel::kMaxAllowedMilliamps);
   if (work_min < 1) work_min = 1;
   if (work_min > 99) work_min = 99;
   if (rest_min < 1) rest_min = 1;

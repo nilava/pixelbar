@@ -18,6 +18,9 @@ struct Settings {
   uint8_t brightness = 48;
   float hue = 0.08f;             // the accent colour, as a hue
   uint16_t sleep_after_min = 0;  // 0 means never
+  // Milliamps of LED draw the render path is allowed to ask for. Lower it for
+  // a smaller bench supply; the cap scales frames that would exceed it.
+  uint16_t max_ma = 2500;
   bool flip = false;             // the case turned the other way up
 
   // Focus timer.

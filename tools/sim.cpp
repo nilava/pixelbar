@@ -319,7 +319,7 @@ int selftest() {
       ports.advance(a.dt);
       app.update(a.dt, a.t);
       app.render(fb, a);
-      renderer.render(fb, grb, app.state().brightness, kMaxMilliamps, kWiring);
+      renderer.render(fb, grb, app.state().brightness, app.max_ma(), kWiring);
     }
   };
 
@@ -424,7 +424,7 @@ int main(int argc, char** argv) {
     app.update(a.dt, a.t);
     app.render(fb, a);
     const RenderStats st =
-        renderer.render(fb, grb, app.state().brightness, kMaxMilliamps, kWiring);
+        renderer.render(fb, grb, app.state().brightness, app.max_ma(), kWiring);
     meter.tick(static_cast<micros_t>(t_us));
 
     // ---- draw

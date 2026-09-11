@@ -62,6 +62,29 @@ static void test_mapping_is_bijective() {
   }
 }
 
+static void test_wled_reference_mapping() {
+  CASE("the configured wiring matches the WLED setup it was taken from");
+  // Three 8x8 boards, first LED top-left of each, rows running left to right,
+  // not serpentine, chained left to right. Under that arrangement the chain
+  // index of a logical pixel is simply tile*64 + y*8 + (x mod 8) — which is
+  // what the panel diagram in WLED shows, green dot top-left of each board and
+  // red dot bottom-right.
+  for (int y = 0; y < kHeight; ++y) {
+    for (int x = 0; x < kWidth; ++x) {
+      const int tile = x / kTileW;
+      const int want = tile * (kTileW * kTileH) + y * kTileW + (x % kTileW);
+      CHECK_EQ(led_index(x, y, kWiring), want);
+    }
+  }
+  // The corners, spelled out, because they are what you check by eye.
+  CHECK_EQ(led_index(0, 0, kWiring), 0);
+  CHECK_EQ(led_index(7, 0, kWiring), 7);
+  CHECK_EQ(led_index(0, 1, kWiring), 8);     // no serpentine: back to the left
+  CHECK_EQ(led_index(7, 7, kWiring), 63);    // last LED of the first board
+  CHECK_EQ(led_index(8, 0, kWiring), 64);    // first of the second
+  CHECK_EQ(led_index(23, 7, kWiring), 191);  // and the last of the chain
+}
+
 static void test_known_layouts() {
   CASE("top-left serpentine by rows");
   const Wiring serp{Corner::TopLeft, Axis::Row, true, false};
@@ -640,6 +663,35 @@ static void test_screens() {
       }
       CHECK(peak < kMaxMilliamps);
     }
+  }
+
+  CASE("the heaviest frame leaves usable headroom on the bench supply too");
+  {
+    // Nothing in the drawing layer is tuned against one supply number. At the
+    // design target (USB-C, 3 A) the heavy frames never trip the cap at all,
+    // which is what keeps brightness consistent between screens. On the 2 A
+    // bench brick the cap does engage, and this pins how late: if a change
+    // pushes the worst frame up far enough that the prototype starts dimming
+    // at ordinary brightness, that is worth knowing before the panel shows it.
+    float worst = 0.0f;
+    for (int i = 0; i < static_cast<int>(Status::Count); ++i) {
+      UiState pu;
+      pu.status = static_cast<Status>(i);
+      ScreenAnim pa;
+      Anim pan;
+      pan.dt = 0.01f;
+      Framebuffer pfb;
+      for (int k = 0; k < 100; ++k) {
+        pan.t = k * 0.02;
+        pfb.clear();
+        draw_screen(pfb, Screen::Status, pu, pan, pa);
+        const float ma = pfb.estimate_ma(255);
+        if (ma > worst) worst = ma;
+      }
+    }
+    const float idle = kNumLeds * kIdleMaPerLed;
+    const float ok_to = 255.0f * (kBenchMilliamps - idle) / (worst - idle);
+    CHECK(ok_to > 200.0f);  // untouched to about 80% brightness, at least
   }
 
   CASE("sleep is dim but actually reaches the LEDs");
@@ -1566,6 +1618,7 @@ static void test_transitions() {
 int main() {
   std::printf("panel tests\n");
   test_mapping_is_bijective();
+  test_wled_reference_mapping();
   test_known_layouts();
   test_font();
   test_color();
