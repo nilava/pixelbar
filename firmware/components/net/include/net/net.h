@@ -2,7 +2,7 @@
 //
 // The one rule this component exists to honour: nothing here touches the model
 // directly. An HTTP handler runs on the server's task, the model runs on the
-// render loop, and the only thing that crosses between them is a twelve-byte
+// render loop, and the only thing that crosses between them is a four-byte
 // command through a FreeRTOS queue that the loop drains at the top of a frame.
 //
 // It matters more than it looks. A handler that reached into the App would be

@@ -39,7 +39,7 @@ simulator implements it in memory.
 
 `net` deliberately does **not** `REQUIRES panel ui`. An HTTP handler runs on the
 server's task and the model runs on the render loop; the only thing crossing
-between them is a twelve-byte command through a FreeRTOS queue, drained at the
+between them is a four-byte command through a FreeRTOS queue, drained at the
 top of a frame. If someone later includes a model header there, that CMake line
 is what fails.
 

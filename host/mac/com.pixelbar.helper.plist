@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.pixelbar.helper</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__APP__/Contents/MacOS/Pixelbar</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <!-- Restart if it dies, but not in a tight loop if it dies at startup. -->
+  <key>KeepAlive</key>
+  <dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>30</integer>
+</dict>
+</plist>

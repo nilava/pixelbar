@@ -334,13 +334,25 @@ static void on_wifi(void* arg, esp_event_base_t base, int32_t id, void* data) {
 // ------------------------------------------------------------------ api
 
 static bool body_of(httpd_req_t* r, char* buf, size_t cap) {
-  const size_t n = r->content_len < cap - 1 ? r->content_len : cap - 1;
-  if (n == 0) {
+  const size_t want = r->content_len < cap - 1 ? r->content_len : cap - 1;
+  if (want == 0) {
     buf[0] = 0;
     return true;
   }
-  int got = httpd_req_recv(r, buf, n);
-  if (got <= 0) return false;
+  // Read until the body is in, rather than once.
+  //
+  // httpd_req_recv returns what one TCP segment carried, which for the short
+  // bodies this started with was always the whole thing. It is not a property
+  // of the protocol, and a body that arrives split — which is any body large
+  // enough to be worth sending — was silently truncated to its first segment
+  // and then parsed as though it were complete.
+  size_t got = 0;
+  while (got < want) {
+    const int n = httpd_req_recv(r, buf + got, want - got);
+    if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;  // a pause, not an end
+    if (n <= 0) return false;
+    got += (size_t)n;
+  }
   buf[got] = 0;
   return true;
 }
@@ -392,7 +404,12 @@ static esp_err_t get_state(httpd_req_t* r) {
       (long)s_status.detents, (unsigned long)s_status.illegal, s_ip, clock,
       (int)s_status.menu_index, s_status.set_label, s_status.set_text);
   httpd_resp_set_type(r, "application/json");
-  return httpd_resp_send(r, buf, n);
+  // snprintf returns what it *would* have written, not what it did. Passing
+  // that straight to httpd_resp_send means that the moment this JSON outgrows
+  // buf the response reads past the end of it — and this string has gained
+  // three fields in a day. Clamp to what is actually there.
+  const int len = (n < 0) ? 0 : (n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1);
+  return httpd_resp_send(r, buf, len);
 }
 
 static esp_err_t post_input(httpd_req_t* r) {

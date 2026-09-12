@@ -207,7 +207,7 @@ POST /api/wifi/forget
 
 Nothing here touches the model. An HTTP handler runs on the server's task and
 the model runs on the render loop; the only thing that crosses between them is
-a twelve-byte command through a FreeRTOS queue that the loop drains at the top
+a four-byte command through a FreeRTOS queue that the loop drains at the top
 of a frame. A handler reaching into the model would be mutating state halfway
 through a frame already being drawn from it, and the failure would be a rare
 torn frame rather than anything a test would catch.

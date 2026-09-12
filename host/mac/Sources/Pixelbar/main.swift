@@ -1,0 +1,141 @@
+// The menu-bar app.
+//
+// Deliberately an agent with no Dock icon and no window: it has one job, it
+// should be visible enough to switch off and invisible the rest of the time.
+import AppKit
+import SwiftUI
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var item: NSStatusItem!
+    private var controller: Controller!
+    private var device: Device!
+    private var observers: [NSKeyValueObservation] = []
+
+    func applicationDidFinishLaunching(_ note: Notification) {
+        device = Device(host: Prefs.host)
+        controller = Controller(device: device)
+
+        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.image = NSImage(systemSymbolName: "rectangle.fill",
+                                     accessibilityDescription: "Pixelbar")
+        rebuildMenu()
+
+        // The menu is rebuilt when it opens rather than kept in sync, because
+        // it is only ever read at that moment and a timer that redrew a hidden
+        // menu would be work nobody sees.
+        Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.rebuildMenu() }
+        }
+
+        if Prefs.host.isEmpty { showHostPrompt() }
+    }
+
+    private func rebuildMenu() {
+        let menu = NSMenu()
+
+        let state: String
+        if controller.paused {
+            state = "Paused"
+        } else if let p = controller.pushed {
+            state = "Showing \(p.label)"
+        } else if controller.reachable {
+            state = "Watching"
+        } else {
+            state = "Panel unreachable"
+        }
+        menu.addItem(withTitle: state, action: nil, keyEquivalent: "")
+
+        let detail = "Mic \(controller.micOn ? "on" : "off") · Camera \(controller.camOn ? "on" : "off")"
+        let d = NSMenuItem(title: detail, action: nil, keyEquivalent: "")
+        d.isEnabled = false
+        menu.addItem(d)
+        menu.addItem(.separator())
+
+        let pause = NSMenuItem(title: "Pause", action: #selector(togglePause), keyEquivalent: "")
+        pause.target = self
+        pause.state = controller.paused ? .on : .off
+        menu.addItem(pause)
+
+        let mic = NSMenuItem(title: "Microphone sets BUSY", action: #selector(toggleMic), keyEquivalent: "")
+        mic.target = self
+        mic.state = Prefs.micEnabled ? .on : .off
+        menu.addItem(mic)
+
+        let cam = NSMenuItem(title: "Camera sets CALL", action: #selector(toggleCam), keyEquivalent: "")
+        cam.target = self
+        cam.state = Prefs.camEnabled ? .on : .off
+        menu.addItem(cam)
+        menu.addItem(.separator())
+
+        // Setting a status by hand is the thing you want when the automatic
+        // rules are not the whole story — stepping out, or a lunch nobody's
+        // microphone knows about.
+        let sub = NSMenu()
+        for s in Status.allCases {
+            let mi = NSMenuItem(title: s.label, action: #selector(pick(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.tag = s.rawValue
+            sub.addItem(mi)
+        }
+        let setItem = NSMenuItem(title: "Set status", action: nil, keyEquivalent: "")
+        menu.setSubmenu(sub, for: setItem)
+        menu.addItem(setItem)
+        menu.addItem(.separator())
+
+        let hostItem = NSMenuItem(title: "Panel address…", action: #selector(showHostPrompt), keyEquivalent: "")
+        hostItem.target = self
+        menu.addItem(hostItem)
+
+        let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(quit)
+
+        item.menu = menu
+        item.button?.image = NSImage(
+            systemSymbolName: controller.paused ? "rectangle" : "rectangle.fill",
+            accessibilityDescription: "Pixelbar")
+    }
+
+    @objc private func togglePause() { controller.paused.toggle(); rebuildMenu() }
+    @objc private func toggleMic() { Prefs.micEnabled.toggle(); rebuildMenu() }
+    @objc private func toggleCam() { Prefs.camEnabled.toggle(); rebuildMenu() }
+
+    @objc private func pick(_ sender: NSMenuItem) {
+        guard let s = Status(rawValue: sender.tag) else { return }
+        Task { await controller.send(s) }
+    }
+
+    @objc private func showHostPrompt() {
+        let a = NSAlert()
+        a.messageText = "Panel address"
+        a.informativeText = "The address the panel showed when it joined your network, e.g. 192.168.1.42"
+        a.addButton(withTitle: "Save")
+        a.addButton(withTitle: "Cancel")
+        let f = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        f.stringValue = Prefs.host
+        f.placeholderString = "192.168.1.42"
+        a.accessoryView = f
+        NSApp.activate(ignoringOtherApps: true)
+        if a.runModal() == .alertFirstButtonReturn {
+            let h = f.stringValue.trimmingCharacters(in: .whitespaces)
+            Task { await controller.setHost(h); rebuildMenu() }
+        }
+    }
+}
+
+// Top-level code in main.swift runs on the main thread but is not, to the
+// Swift 6 concurrency checker, main-actor *isolated* — so constructing a
+// @MainActor delegate here has to say out loud that the thread is already the
+// right one. assumeIsolated asserts it rather than assuming it: if this were
+// ever run from somewhere else it would trap instead of racing.
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    // Accessory: no Dock icon, no menu bar of its own.
+    app.setActivationPolicy(.accessory)
+    // Held for the process lifetime; without this the delegate is released as
+    // soon as this closure returns and the menu bar item goes with it.
+    objc_setAssociatedObject(app, "pixelbar.delegate", delegate, .OBJC_ASSOCIATION_RETAIN)
+    app.run()
+}
