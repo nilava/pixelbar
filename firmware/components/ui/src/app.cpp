@@ -136,6 +136,9 @@ void App::update(float dt_s, double now_s) {
       go_home();  // the upload failed; put the device back where it was
     }
 
+    now_unix_ = ports_->unix_time();
+    take_draw(dt_s);
+
     // Pairing, the same way. It outranks everything except an update, because
     // a code nobody can read is a code nobody can use, and it is on screen for
     // about twenty seconds once in the life of a host.
@@ -368,6 +371,63 @@ void App::apply_settings() {
     ui_.timer_total_s = want;
     ui_.timer_left_s = want;
     timer_accum_s_ = 0.0f;
+  }
+}
+
+// Collect a host's draw request, and decide whether it gets the panel.
+void App::take_draw(float dt_s) {
+  DrawPayload next;
+  if (ports_->take_draw(&next)) {
+    // Accepted when it is at least as important as what is already up. Equal
+    // priority from a different source replaces rather than stacks: two things
+    // that both think they are worth fifty are, and the newer one is the one
+    // somebody just asked for.
+    const bool outranks = !drawing_ || next.priority >= draw_.priority;
+    if (outranks) {
+      draw_ = next;
+      drawing_ = true;
+      draw_left_s_ = draw_.ttl_s;
+      refresh_draw();
+      if (screen() != panel::Screen::Draw) show_net(panel::Screen::Draw);
+    }
+  }
+
+  if (!drawing_) return;
+
+  // A countdown keeps the payload alive: something counting down to a moment
+  // should not vanish before it arrives, whatever ttl was asked for.
+  const bool counting = draw_.until_unix > 0 && ui_.draw_seconds > 0;
+  if (draw_.ttl_s > 0.0f && !counting) {
+    draw_left_s_ -= dt_s;
+    if (draw_left_s_ <= 0.0f) {
+      drawing_ = false;
+      ui_.draw_text = "";
+      ui_.draw_icon = nullptr;
+      ui_.draw_seconds = -1;
+      ui_.draw_bar = -1.0f;
+      if (screen() == panel::Screen::Draw) go_home();
+      return;
+    }
+  }
+  refresh_draw();
+}
+
+void App::refresh_draw() {
+  ui_.draw_text = draw_.text;
+  ui_.draw_icon = panel::icon_by_name(draw_.icon);
+  ui_.draw_bar = draw_.bar;
+  ui_.draw_tint = panel::RGB(static_cast<uint8_t>((draw_.tint >> 16) & 0xFF),
+                             static_cast<uint8_t>((draw_.tint >> 8) & 0xFF),
+                             static_cast<uint8_t>(draw_.tint & 0xFF));
+
+  // The countdown is worked out here, from a deadline and the wall clock,
+  // rather than sent as a number that would be stale the moment it arrived.
+  // Without a clock there is nothing to count against, so it is not drawn —
+  // the same rule the Clock screen follows.
+  ui_.draw_seconds = -1;
+  if (draw_.until_unix > 0 && ui_.time_valid) {
+    const int64_t left = draw_.until_unix - now_unix_;
+    ui_.draw_seconds = left > 0 ? static_cast<int>(left > 5999 ? 5999 : left) : 0;
   }
 }
 
@@ -742,6 +802,9 @@ void App::handle(const Event& e, double now_s) {
         // Inside an adjuster, pressing accepts and goes back one level — to the
         // menu you came from, not onward to some unrelated setting.
         pop();
+      } else if (screen() == Screen::Draw) {
+        drawing_ = false;
+        go_home();
       } else if (is_net_screen(screen())) {
         // These are notices, so a press dismisses one. Without this the
         // address screen could only be left by turning the knob or waiting it

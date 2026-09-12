@@ -94,6 +94,26 @@ float net_ota_progress(void);
 // room rather than merely within radio range.
 uint32_t net_passkey(void);
 
+// The latest thing a host asked the panel to show.
+//
+// Text does not fit in the four-byte command queue, so this crosses the seam
+// the same way the network screens' text does: the network component keeps it
+// and the render loop collects it. Returns false when nothing new has arrived
+// since the last call, so the model can tell a fresh request from the same one
+// sitting there.
+typedef struct {
+  char text[48];
+  char icon[12];
+  char source[16];
+  uint8_t priority;
+  float ttl_s;
+  int64_t until_unix;
+  float bar;
+  uint32_t tint;
+} net_draw_t;
+
+bool net_take_draw(net_draw_t* out);
+
 // Confirms the running image so the bootloader stops holding the previous one
 // in reserve. Call it only once the device has demonstrably survived: doing it
 // at startup would defeat the point of rollback entirely.

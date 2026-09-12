@@ -82,6 +82,17 @@ class App {
   // device does not sit on a notice forever.
   static constexpr float kNetInfoSeconds = 12.0f;
 
+  // What a draw request has to outrank to take the panel.
+  //
+  // Borrowed from Busy Bar's model, which is the right shape: a number, and a
+  // rule that a request is accepted when it is at least as important as what
+  // is already showing. Three levels is all this device needs.
+  static constexpr uint8_t kDrawAmbient = 10;       // background decoration
+  static constexpr uint8_t kDrawNotify = 50;        // the default
+  static constexpr uint8_t kDrawUrgent = 90;        // a call, a meeting now
+  // Pairing and an update are above all of them and are not draw requests:
+  // they are states the device is in, and a host cannot outrank them.
+
   // The screen predicate, for tests: whether the panel is on one of the
   // network notices rather than a view the user chose.
   static bool is_net_screen_public(panel::Screen s) { return is_net_screen(s); }
@@ -134,6 +145,18 @@ class App {
   void reset_timer();
 
   void show_net(panel::Screen s);
+
+  // A host-supplied payload, owned here.
+  //
+  // Copied rather than pointed at. UiState::net_text borrows a static from the
+  // network component, which is fine for an SSID that outlives every frame and
+  // wrong for a message that is replaced while the panel is drawing it.
+  void take_draw(float dt_s);
+  void refresh_draw();
+  DrawPayload draw_;
+  bool drawing_ = false;
+  float draw_left_s_ = 0.0f;
+  int64_t now_unix_ = 0;
 
   // The settings tree. `group_index_` and `item_index_` are where you are in
   // it; ui_.menu_index is whichever of the two the current list is showing,

@@ -120,6 +120,7 @@ const char* screen_name(Screen s) {
     case Screen::WifiInfo: return "wifiinfo";
     case Screen::OtaProgress: return "ota";
     case Screen::Pairing: return "pairing";
+    case Screen::Draw: return "draw";
     default: return "?";
   }
 }
@@ -136,6 +137,41 @@ const Pattern kScenes[] = {Pattern::Solid, Pattern::Rainbow, Pattern::Plasma,
 const char* const kSceneNames[] = {"SOLID", "RAINBOW", "PLASMA", "SPARKLE"};
 constexpr int kSceneCount = static_cast<int>(sizeof(kScenes) / sizeof(kScenes[0]));
 }  // namespace
+
+// The icons a host may ask for, by name.
+//
+// A deliberately short list, and deliberately not every icon in the set: these
+// are the ones that mean something to a message pushed from outside. The
+// internal ones — the WiFi arcs, the play hint — are parts of screens rather
+// than vocabulary.
+const Icon* icon_by_name(const char* name) {
+  if (!name || !name[0]) return nullptr;
+  struct Named { const char* name; const Icon* icon; };
+  static const Named kNamed[] = {
+      {"free", &kIconFree},       {"busy", &kIconBusy},
+      {"dnd", &kIconDnd},         {"moon", &kIconMoon},
+      {"sun", &kIconSunCore},     {"timer", &kIconHourglass},
+      {"gear", &kIconGear},       {"grid", &kIconGrid},
+      {"display", &kIconDisplay}, {"hand", &kIconHand},
+      {"motion", &kIconMotion},   {"lock", &kIconLock},
+      {"cross", &kIconCross},     {"warning", &kIconWarning},
+      {"download", &kIconDownload}, {"info", &kIconInfo},
+      {"palette", &kIconPalette},
+  };
+  for (const Named& n : kNamed) {
+    const char* a = n.name;
+    const char* b = name;
+    while (*a && *b) {
+      // Case-folded: a host should not have to know how this table is spelled.
+      const char lb = (*b >= 'A' && *b <= 'Z') ? (char)(*b + 32) : *b;
+      if (*a != lb) break;
+      ++a;
+      ++b;
+    }
+    if (*a == 0 && *b == 0) return n.icon;
+  }
+  return nullptr;
+}
 
 int scene_count() { return kSceneCount; }
 Pattern scene_pattern(int index) {
@@ -160,6 +196,21 @@ void draw_tiny_number(Framebuffer& fb, int x, int y, int value, int digits, RGB 
       draw_tiny_digit(fb, x + i * kTinyAdvance, y, static_cast<char>('0' + d), color);
     }
   }
+}
+
+void draw_marquee(Framebuffer& fb, const Anim& a, const char* text, int x0,
+                  int box_w, int y, RGB color) {
+  if (!text || !text[0]) return;
+  const int w = mini_measure_text(text);
+  if (w <= box_w) {
+    mini_draw_text_centered(fb, x0, box_w, y, text, color);
+    return;
+  }
+  // Nine pixels a second: slow enough to read a word at a time, fast enough
+  // that a long string comes round again before you have given up on it.
+  const float span = static_cast<float>(w + box_w);
+  const float x = static_cast<float>(box_w) - a.phase(span / 9.0f) * span;
+  mini_draw_text_aa(fb, static_cast<float>(x0) + x, y, text, color, x0, x0 + box_w);
 }
 
 void draw_list_row(Framebuffer& fb, const MenuEntry& e, int idx, int count,
@@ -531,16 +582,8 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       // for the same reason an SSID does: a name you cannot read in full is
       // not a choice you can make.
       const char* text = ui.set_text ? ui.set_text : "";
-      const int w = mini_measure_text(text);
       const int y = ui.set_fraction >= 0.0f ? 0 : 1;
-      if (w <= kMiniLabelBox) {
-        mini_draw_text_centered(fb, kLabelX, kMiniLabelBox, y, text, RGB(170, 170, 170));
-      } else {
-        const float span = static_cast<float>(w + kMiniLabelBox);
-        const float x = static_cast<float>(kMiniLabelBox) - a.phase(span / 9.0f) * span;
-        mini_draw_text_aa(fb, static_cast<float>(kLabelX) + x, y, text,
-                          RGB(170, 170, 170), kLabelX, kWidth);
-      }
+      draw_marquee(fb, a, text, kLabelX, kMiniLabelBox, y, RGB(170, 170, 170));
 
       // The rail, for anything with a range. A toggle has nowhere to be along
       // a line, so it does not get one.
@@ -746,18 +789,7 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       // and a dotted quad is fifteen, against a panel seventeen pixels wide
       // once the mark has taken its six.
       const char* text = ui.net_text && ui.net_text[0] ? ui.net_text : "...";
-      const int w = mini_measure_text(text);
-      const int box = kWidth - 8;
-      if (w <= box) {
-        mini_draw_text(fb, 8 + (box - w) / 2, 1, text, tint);
-      } else {
-        // One pass every few seconds with a gap, rather than a continuous
-        // belt: a name you are trying to read off a shelf needs to start
-        // somewhere, and a loop with no beginning is hard to catch.
-        const float span = static_cast<float>(w + box);
-        const float x = static_cast<float>(box) - a.phase(span / 9.0f) * span;
-        mini_draw_text_aa(fb, 8.0f + x, 1, text, tint, 8, kWidth);
-      }
+      draw_marquee(fb, a, text, 8, kWidth - 8, 1, tint);
       break;
     }
 
@@ -781,6 +813,51 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       const int lit_cols = static_cast<int>(p * kWidth + 0.5f);
       for (int x = 0; x < kWidth; x += 4)
         fb.set(x, 7, x < lit_cols ? lit : warm.scaled(20));
+      break;
+    }
+
+    case Screen::Draw: {
+      // One screen for everything a host can ask for, laid out by what it was
+      // actually given rather than by a fixed template. Four ingredients: an
+      // icon, a line of text, a countdown, a rail. Nobody sends all four —
+      // there is room for about two — so the layout is decided here by which
+      // ones are present.
+      const float k = 0.88f + 0.12f * a.wave(2.6f);
+      const RGB lit = ui.draw_tint.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
+
+      const bool has_icon = ui.draw_icon != nullptr;
+      const bool has_time = ui.draw_seconds >= 0;
+      const bool has_text = ui.draw_text && ui.draw_text[0];
+      const bool has_bar = ui.draw_bar >= 0.0f;
+
+      const int x0 = has_icon ? kLabelX : 0;
+      const int box = kWidth - x0;
+      if (has_icon) draw_icon(fb, kIconX, 0, *ui.draw_icon, lit);
+
+      if (has_time && has_text) {
+        // They take turns rather than sharing the panel.
+        //
+        // The first version stacked them — words on row 0, clock beneath — and
+        // they collided: the mini font is five rows tall and so is the time
+        // face, which is ten rows in a panel eight rows high. Shrinking either
+        // one to fit would make both harder to read than showing one at a
+        // time, and the thing a countdown is for is being readable from across
+        // a room.
+        //
+        // Five seconds each, which is long enough to read a scrolling line and
+        // short enough that the number is never far away.
+        if (a.phase(10.0f) < 0.5f) {
+          draw_marquee(fb, a, ui.draw_text, x0, box, 1, RGB(190, 190, 190));
+        } else {
+          draw_pair_face(fb, ui.draw_seconds / 60, ui.draw_seconds % 60, true, lit);
+        }
+      } else if (has_time) {
+        draw_pair_face(fb, ui.draw_seconds / 60, ui.draw_seconds % 60, true, lit);
+      } else if (has_text) {
+        draw_marquee(fb, a, ui.draw_text, x0, box, has_bar ? 1 : 2, lit);
+      }
+
+      if (has_bar) draw_bar_aa(fb, 7, 7, ui.draw_bar, lit, ui.draw_tint.scaled(24));
       break;
     }
 

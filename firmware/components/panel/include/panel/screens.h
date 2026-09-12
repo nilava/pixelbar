@@ -51,10 +51,28 @@ struct MenuEntry {
 void draw_list_row(Framebuffer& fb, const MenuEntry& e, int idx, int count,
                    const Anim& a);
 
+// Text in a box, scrolled only when it does not fit.
+//
+// Was open-coded identically in two places with the rate written out twice; a
+// third screen needing it made that a pattern rather than a coincidence.
+//
+// One pass with a gap rather than a continuous belt: a name you are trying to
+// read off a shelf needs to start somewhere, and a loop with no beginning is
+// hard to catch. Text that fits is centred and still, because scrolling
+// something legible is just movement.
+void draw_marquee(Framebuffer& fb, const Anim& a, const char* text, int x0,
+                  int box_w, int y, RGB color);
+
 // The ambient scenes, in the order the picker offers them. A separate list
 // from Pattern because not every pattern is a scene: Text and Clock duplicate
 // screens that already exist, and MapTest is a diagnostic rather than
 // something anybody would choose to look at.
+// An icon by name, for hosts that can send a word but not a bitmap. Returns
+// nullptr for anything unknown, which the caller should treat as "no icon"
+// rather than as an error: a host naming an icon this firmware does not have is
+// a version skew, not a fault.
+const Icon* icon_by_name(const char* name);
+
 Pattern scene_pattern(int index);
 const char* scene_name(int index);
 int scene_count();
@@ -85,6 +103,7 @@ enum class Screen : uint8_t {
   WifiInfo,        // the address, so you can reach the page from your own network
   OtaProgress,     // a firmware update is being written; do not unplug it
   Pairing,         // the six digits a Bluetooth host must be told
+  Draw,            // whatever a host asked the panel to show
   Count,
 };
 
@@ -174,6 +193,19 @@ struct UiState {
   // the only place they exist: that is what makes the bond mean the host is in
   // the room rather than merely in range.
   uint32_t passkey = 0;
+
+  // What a host asked the panel to show, flattened for the draw layer the same
+  // way a setting is: the model decides what the words are and this layer only
+  // draws them. `draw_text` is owned by the model, not borrowed — unlike
+  // net_text, which points at a static in the network component.
+  const char* draw_text = "";
+  const Icon* draw_icon = nullptr;
+  RGB draw_tint{255, 138, 31};
+  // Seconds remaining on a countdown, or negative for none. The model works it
+  // out from a deadline and the wall clock; the panel just renders mm:ss.
+  int draw_seconds = -1;
+  // 0..1 draws a rail, negative draws none.
+  float draw_bar = -1.0f;
   bool wifi_connected = false;
 };
 

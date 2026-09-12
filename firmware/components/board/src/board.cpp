@@ -13,6 +13,7 @@
 #include "esp_timer.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "net/net.h"
 #include "pins.h"
 
 namespace board {
@@ -288,6 +289,31 @@ bool DevicePorts::wall_clock(int* h, int* m, int* s) {
 }
 
 bool DevicePorts::wifi_connected() { return wifi_; }
+int64_t DevicePorts::unix_time() {
+  // Zero until SNTP has answered, for the same reason wall_clock returns false
+  // then: before the first sync the system clock reads 1970, and a countdown
+  // against that is not a countdown.
+  if (!time_valid_) return 0;
+  return (int64_t)time(NULL);
+}
+
+bool DevicePorts::take_draw(ui::DrawPayload* out) {
+  net_draw_t d;
+  if (!net_take_draw(&d)) return false;
+  // Field by field rather than a memcpy: the two structs are deliberately
+  // separate types on either side of a seam that `ui` must not see through,
+  // and a memcpy would silently start lying the moment one of them changed.
+  snprintf(out->text, sizeof(out->text), "%s", d.text);
+  snprintf(out->icon, sizeof(out->icon), "%s", d.icon);
+  snprintf(out->source, sizeof(out->source), "%s", d.source);
+  out->priority = d.priority;
+  out->ttl_s = d.ttl_s;
+  out->until_unix = d.until_unix;
+  out->bar = d.bar;
+  out->tint = d.tint;
+  return true;
+}
+
 ui::Ports::NetMode DevicePorts::net_mode() { return net_mode_; }
 const char* DevicePorts::net_text() { return net_text_; }
 

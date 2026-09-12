@@ -196,14 +196,49 @@ It emulates the touch pads and the knob, sets status and brightness directly,
 runs the WiFi setup, and shows what the panel is showing.
 
 ```
-GET  /               the page
-GET  /api/state      screen, status, timer, brightness, fps, clock, encoder
-POST /api/input      pads as levels, knob detents, status, brightness
-GET  /api/wifi/scan  nearby networks
-GET  /api/wifi/status
-POST /api/wifi/connect   {"ssid": "...", "pass": "..."}
-POST /api/wifi/forget
+GET    /                     the page
+GET    /api/state            screen, status, timer, brightness, fps, clock
+POST   /api/input            pads as levels, knob detents, status, brightness
+POST   /api/display/draw     show something; see below
+DELETE /api/display/draw     stop showing it
+POST   /api/ota              a firmware image; the panel restarts itself
+GET    /api/wifi/scan        nearby networks
+GET    /api/wifi/status
+POST   /api/wifi/connect     {"ssid": "...", "pass": "..."}
+POST   /api/wifi/forget
 ```
+
+### Showing something
+
+One endpoint for everything a host wants to put on the panel — a build result,
+a doorbell, the meeting you are about to be late for.
+
+```bash
+curl -X POST http://<panel>/api/display/draw -d '{
+  "source":   "ci",            # equal priority from a different source replaces
+  "text":     "BUILD PASSED",  # scrolls when it does not fit
+  "icon":     "free",          # one of the built-in icons, by name
+  "priority": 50,              # 10 ambient, 50 notification, 90 urgent
+  "ttl":      10,              # seconds; 0 means until something replaces it
+  "color":    "#00D246"
+}'
+```
+
+`"until": <unix seconds>` counts down to a moment rather than for a duration —
+a duration is already stale by however long the request took to arrive. A
+payload that is still counting outlives its `ttl`, because something counting
+down to a moment should not vanish before the moment arrives. With no clock
+yet, no countdown is drawn rather than a wrong one.
+
+Text and a countdown **take turns** rather than sharing the panel. The mini
+font is five rows tall and so is the time face, which is ten rows in a panel
+eight rows high; shrinking either to fit makes both harder to read than showing
+one at a time.
+
+A request is accepted when it is at least as important as what is already
+showing, so a build notification cannot push a call off the panel. Pairing and
+a firmware update outrank every request — those are states the device is in,
+not things a host asked for.
 
 Nothing here touches the model. An HTTP handler runs on the server's task and
 the model runs on the render loop; the only thing that crosses between them is

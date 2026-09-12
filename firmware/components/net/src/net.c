@@ -416,6 +416,119 @@ static esp_err_t get_state(httpd_req_t* r) {
   return httpd_resp_send(r, buf, n);
 }
 
+static bool str_field(const char* body, const char* key, char* out, size_t cap) {
+  const char* p = strstr(body, key);
+  if (!p) return false;
+  p = strchr(p + strlen(key), ':');
+  if (!p) return false;
+  while (*p && *p != '"') ++p;
+  if (*p != '"') return false;
+  ++p;
+  size_t n = 0;
+  while (*p && *p != '"' && n + 1 < cap) {
+    // Only the escapes a password or an SSID can actually contain. Anything
+    // else is passed through as written rather than guessed at.
+    if (*p == '\\' && p[1]) {
+      ++p;
+      char c = *p;
+      if (c == 'n') c = '\n';
+      else if (c == 't') c = '\t';
+      out[n++] = c;
+      ++p;
+      continue;
+    }
+    out[n++] = *p++;
+  }
+  if (*p != '"') return false;  // ran out of buffer or out of body
+  out[n] = '\0';
+  return true;
+}
+
+// The latest draw request, and a serial so the render loop can tell a new one
+// from the same one still sitting here.
+//
+// Deliberately last-one-wins rather than a queue. A panel eight rows tall shows
+// one thing; queueing messages behind each other would mean a host that sent
+// five in a second had four of them shown to nobody, seconds late.
+static net_draw_t s_draw;
+static uint32_t s_draw_serial = 0;
+static uint32_t s_draw_taken = 0;
+
+bool net_take_draw(net_draw_t* out) {
+  if (s_draw_serial == s_draw_taken) return false;
+  s_draw_taken = s_draw_serial;
+  *out = s_draw;
+  return true;
+}
+
+// #RRGGBB or #RRGGBBAA, or a bare hex triple. Alpha is parsed and discarded:
+// there is nothing to blend against on a panel that is its own background.
+static uint32_t parse_colour(const char* body, uint32_t fallback) {
+  char hex[12];
+  if (!str_field(body, "\"color\"", hex, sizeof(hex))) return fallback;
+  const char* p = (hex[0] == '#') ? hex + 1 : hex;
+  uint32_t v = 0;
+  int n = 0;
+  for (; p[n] && n < 6; ++n) {
+    const char c = p[n];
+    uint32_t d;
+    if (c >= '0' && c <= '9') d = (uint32_t)(c - '0');
+    else if (c >= 'a' && c <= 'f') d = (uint32_t)(c - 'a' + 10);
+    else if (c >= 'A' && c <= 'F') d = (uint32_t)(c - 'A' + 10);
+    else return fallback;
+    v = (v << 4) | d;
+  }
+  return n == 6 ? v : fallback;
+}
+
+static esp_err_t post_draw(httpd_req_t* r) {
+  char body[320];
+  if (!body_of(r, body, sizeof(body))) return httpd_resp_send_500(r);
+
+  net_draw_t d = {0};
+  d.priority = 50;
+  d.ttl_s = 10.0f;
+  d.bar = -1.0f;
+  d.tint = 0xFF8A1F;
+
+  str_field(body, "\"text\"", d.text, sizeof(d.text));
+  str_field(body, "\"icon\"", d.icon, sizeof(d.icon));
+  str_field(body, "\"source\"", d.source, sizeof(d.source));
+  d.tint = parse_colour(body, d.tint);
+
+  int v = 0;
+  if (field(body, "\"priority\"", &v)) d.priority = (uint8_t)(v < 1 ? 1 : (v > 100 ? 100 : v));
+  if (field(body, "\"ttl\"", &v)) d.ttl_s = (float)(v < 0 ? 0 : v);
+  if (field(body, "\"bar\"", &v)) d.bar = (float)(v < 0 ? 0 : (v > 100 ? 100 : v)) / 100.0f;
+  // A deadline, not a duration: a duration is already stale by however long
+  // the request took to arrive, and this one may sit on screen for minutes.
+  // field() returns an int, which runs out in 2038 — long after the rest of
+  // this will have been rewritten, and the alternative is a second parser.
+  if (field(body, "\"until\"", &v)) d.until_unix = (int64_t)(uint32_t)v;
+
+  if (d.text[0] == 0 && d.icon[0] == 0 && d.until_unix == 0 && d.bar < 0.0f) {
+    httpd_resp_set_status(r, "400 Bad Request");
+    return httpd_resp_sendstr(r, "{\"error\":\"nothing to draw\"}");
+  }
+
+  s_draw = d;
+  ++s_draw_serial;
+  httpd_resp_set_type(r, "application/json");
+  return httpd_resp_sendstr(r, "{\"ok\":true}");
+}
+
+static esp_err_t delete_draw(httpd_req_t* r) {
+  // An empty payload with no ttl: the model drops it on the next frame.
+  net_draw_t d = {0};
+  d.priority = 100;   // outranks whatever is up, since the point is to clear it
+  d.ttl_s = 0.001f;
+  d.bar = -1.0f;
+  s_draw = d;
+  ++s_draw_serial;
+  httpd_resp_set_type(r, "application/json");
+  return httpd_resp_sendstr(r, "{\"cleared\":true}");
+}
+
 // The command vocabulary, independent of how it arrived.
 //
 // Extracted so that a write over Bluetooth and a POST over WiFi are the same
@@ -447,33 +560,6 @@ static esp_err_t post_input(httpd_req_t* r) {
 // Pulls a quoted string field out of the body. The same deliberately small
 // parser as field(), for the same reason: one JSON object of three keys does
 // not justify linking cJSON, and everything here is length-checked.
-static bool str_field(const char* body, const char* key, char* out, size_t cap) {
-  const char* p = strstr(body, key);
-  if (!p) return false;
-  p = strchr(p + strlen(key), ':');
-  if (!p) return false;
-  while (*p && *p != '"') ++p;
-  if (*p != '"') return false;
-  ++p;
-  size_t n = 0;
-  while (*p && *p != '"' && n + 1 < cap) {
-    // Only the escapes a password or an SSID can actually contain. Anything
-    // else is passed through as written rather than guessed at.
-    if (*p == '\\' && p[1]) {
-      ++p;
-      char c = *p;
-      if (c == 'n') c = '\n';
-      else if (c == 't') c = '\t';
-      out[n++] = c;
-      ++p;
-      continue;
-    }
-    out[n++] = *p++;
-  }
-  if (*p != '"') return false;  // ran out of buffer or out of body
-  out[n] = '\0';
-  return true;
-}
 
 // Escapes a string into a JSON value. An SSID is 32 arbitrary octets and is
 // chosen by someone else, so it can perfectly well contain a quote or a
@@ -644,6 +730,8 @@ static esp_err_t start_server(void) {
   const httpd_uri_t conn = {"/api/wifi/connect", HTTP_POST, post_wifi_connect, NULL};
   const httpd_uri_t forget = {"/api/wifi/forget", HTTP_POST, post_wifi_forget, NULL};
   const httpd_uri_t ota = {"/api/ota", HTTP_POST, ota_post, NULL};
+  const httpd_uri_t draw = {"/api/display/draw", HTTP_POST, post_draw, NULL};
+  const httpd_uri_t undraw = {"/api/display/draw", HTTP_DELETE, delete_draw, NULL};
   httpd_register_uri_handler(s_server, &root);
   httpd_register_uri_handler(s_server, &state);
   httpd_register_uri_handler(s_server, &input);
@@ -652,6 +740,8 @@ static esp_err_t start_server(void) {
   httpd_register_uri_handler(s_server, &conn);
   httpd_register_uri_handler(s_server, &forget);
   httpd_register_uri_handler(s_server, &ota);
+  httpd_register_uri_handler(s_server, &draw);
+  httpd_register_uri_handler(s_server, &undraw);
   // The captive-portal half that DNS cannot do. Harmless in station mode: a
   // wrong path on the home network redirects to a page that is not there,
   // which is no worse than the 404 it replaces.

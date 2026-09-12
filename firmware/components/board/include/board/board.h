@@ -46,6 +46,8 @@ class DevicePorts : public ui::Ports {
   float ota_progress() override { return ota_; }
   void set_ota(float p) { ota_ = p; }
   uint32_t passkey() override { return passkey_; }
+  int64_t unix_time() override;
+  bool take_draw(ui::DrawPayload* out) override;
   void set_passkey(uint32_t k) { passkey_ = k; }
 
   void set_net(ui::Ports::NetMode m, const char* text) {

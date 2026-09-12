@@ -14,6 +14,21 @@
 
 namespace ui {
 
+// What a host can ask the panel to show. A flat struct with no allocation and
+// no pointers out, so it can be copied across the seam by value.
+struct DrawPayload {
+  char text[48] = {0};
+  char icon[12] = {0};      // a name, looked up by panel::icon_by_name
+  char source[16] = {0};    // who asked; equal priority from a different
+                            // source replaces rather than stacking
+  uint8_t priority = 50;    // 1..100; see kDrawPriority* in app.h
+  float ttl_s = 10.0f;      // 0 means "until something replaces it"
+  int64_t until_unix = 0;   // countdown target, 0 for none
+  float bar = -1.0f;        // 0..1 draws a rail, negative draws none
+  uint32_t tint = 0xFF8A1F;
+};
+
+
 struct Ports {
   virtual ~Ports() = default;
 
@@ -27,6 +42,14 @@ struct Ports {
   // Local wall clock. Returns false until there is a real time source, which
   // is what makes the Clock screen show `--:--` rather than a plausible lie.
   virtual bool wall_clock(int* h, int* m, int* s) { return false; }
+
+  // Seconds since the epoch, or 0 when there is no time source.
+  //
+  // wall_clock gives the hours and minutes a clock face needs; this gives the
+  // absolute moment a countdown needs. A host sends a deadline rather than a
+  // duration, because a duration is stale by however long the message took to
+  // arrive, and a deadline is not.
+  virtual int64_t unix_time() { return 0; }
 
   virtual bool wifi_connected() { return false; }
 
@@ -50,6 +73,15 @@ struct Ports {
   // this takes the panel: it is the one moment where what the device needs to
   // say matters more than whatever you were looking at.
   virtual uint32_t passkey() { return 0; }
+
+  // Something a host asked the panel to show.
+  //
+  // Not carried on the command queue: that is four bytes and this has text in
+  // it. The device keeps the latest request in the network component and the
+  // model collects it here, the same arrangement net_text already uses — with
+  // the difference that the model *copies* this rather than holding a pointer
+  // into somebody else's buffer.
+  virtual bool take_draw(DrawPayload* out) { return false; }
 };
 
 }  // namespace ui

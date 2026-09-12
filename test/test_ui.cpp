@@ -798,6 +798,17 @@ class TestPorts : public Ports {
   }
   bool wifi_connected() override { return wifi; }
   ui::Ports::NetMode net_mode() override { return mode; }
+  int64_t unix_time() override { return has_clock ? epoch : 0; }
+  bool take_draw(ui::DrawPayload* out) override {
+    if (!draw_pending) return false;
+    draw_pending = false;
+    *out = draw;
+    return true;
+  }
+
+  ui::DrawPayload draw;
+  bool draw_pending = false;
+  int64_t epoch = 1789000000;
   const char* net_text() override { return text; }
 
   ui::Ports::NetMode mode = ui::Ports::NetMode::Online;
@@ -1521,6 +1532,136 @@ void test_app_flourish() {
 }
 
 
+void test_draw_requests() {
+  // A helper that pushes a payload the way a host would.
+  auto push = [](AppRig& r, const char* text, uint8_t prio, float ttl,
+                 const char* source = "test") {
+    ui::DrawPayload p;
+    snprintf(p.text, sizeof(p.text), "%s", text);
+    snprintf(p.source, sizeof(p.source), "%s", source);
+    p.priority = prio;
+    p.ttl_s = ttl;
+    r.ports.draw = p;
+    r.ports.draw_pending = true;
+    r.run(0.1f);
+  };
+
+  CASE("a request takes the panel and gives it back when it expires");
+  {
+    AppRig r;
+    const panel::Screen home = r.app.screen();
+    push(r, "BUILD OK", App::kDrawNotify, 2.0f);
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Draw));
+    CHECK(std::strcmp(r.app.state().draw_text, "BUILD OK") == 0);
+
+    r.run(2.5f);
+    r.settle();
+    CHECK(r.app.screen() != panel::Screen::Draw);
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(home));
+  }
+
+  CASE("a more important request replaces a less important one");
+  {
+    AppRig r;
+    push(r, "AMBIENT", App::kDrawAmbient, 30.0f);
+    CHECK(std::strcmp(r.app.state().draw_text, "AMBIENT") == 0);
+    push(r, "URGENT", App::kDrawUrgent, 30.0f);
+    CHECK(std::strcmp(r.app.state().draw_text, "URGENT") == 0);
+  }
+
+  CASE("a less important one does not interrupt what is already up");
+  {
+    AppRig r;
+    push(r, "URGENT", App::kDrawUrgent, 30.0f);
+    push(r, "AMBIENT", App::kDrawAmbient, 30.0f);
+    // Still the important one. A build notification should not push a call
+    // off the panel.
+    CHECK(std::strcmp(r.app.state().draw_text, "URGENT") == 0);
+  }
+
+  CASE("equal priority from anywhere replaces, because it is newer");
+  {
+    AppRig r;
+    push(r, "FIRST", App::kDrawNotify, 30.0f, "a");
+    push(r, "SECOND", App::kDrawNotify, 30.0f, "b");
+    CHECK(std::strcmp(r.app.state().draw_text, "SECOND") == 0);
+  }
+
+  CASE("a press puts the panel back");
+  {
+    AppRig r;
+    push(r, "MESSAGE", App::kDrawNotify, 60.0f);
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Draw));
+    r.press();
+    r.settle();
+    CHECK(r.app.screen() != panel::Screen::Draw);
+  }
+
+  CASE("a countdown is worked out from the deadline, not sent as a number");
+  {
+    // The host sends a moment; the panel works out how far away it is. A
+    // duration would already be stale by however long the request took to
+    // arrive, and this one sits on screen for minutes.
+    AppRig r;
+    ui::DrawPayload p;
+    snprintf(p.text, sizeof(p.text), "STANDUP");
+    p.priority = App::kDrawUrgent;
+    p.ttl_s = 5.0f;
+    p.until_unix = r.ports.epoch + 300;      // five minutes out
+    r.ports.draw = p;
+    r.ports.draw_pending = true;
+    r.run(0.1f);
+    CHECK_EQ(r.app.state().draw_seconds, 300);
+
+    // Time passes on the host's clock; the panel follows it.
+    r.ports.epoch += 120;
+    r.run(0.1f);
+    CHECK_EQ(r.app.state().draw_seconds, 180);
+
+    // And it outlives its ttl, because something counting down to a moment
+    // should not vanish before the moment arrives.
+    r.run(10.0f);
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Draw));
+  }
+
+  CASE("with no clock there is no countdown, rather than a wrong one");
+  {
+    AppRig r(false);              // no time source
+    ui::DrawPayload p;
+    snprintf(p.text, sizeof(p.text), "SOON");
+    p.priority = App::kDrawNotify;
+    p.ttl_s = 30.0f;
+    p.until_unix = 1789000300;
+    r.ports.draw = p;
+    r.ports.draw_pending = true;
+    r.run(0.1f);
+    CHECK_EQ(r.app.state().draw_seconds, -1);
+  }
+
+  CASE("an icon is named, and an unknown name is simply no icon");
+  {
+    AppRig r;
+    ui::DrawPayload p;
+    snprintf(p.text, sizeof(p.text), "HI");
+    snprintf(p.icon, sizeof(p.icon), "WARNING");   // case-folded on purpose
+    p.priority = App::kDrawNotify;
+    p.ttl_s = 30.0f;
+    r.ports.draw = p;
+    r.ports.draw_pending = true;
+    r.run(0.1f);
+    CHECK(r.app.state().draw_icon != nullptr);
+
+    snprintf(p.icon, sizeof(p.icon), "nosuchicon");
+    r.ports.draw = p;
+    r.ports.draw_pending = true;
+    r.run(0.1f);
+    // A host naming an icon this firmware does not have is version skew, not
+    // a fault: it draws the rest of the message.
+    CHECK(r.app.state().draw_icon == nullptr);
+    CHECK(std::strcmp(r.app.state().draw_text, "HI") == 0);
+  }
+}
+
 void test_timer_cycles() {
   // Dials a set down to one-minute phases so a whole pomodoro runs inside a
   // test. Each turn is settled before the next: the adjuster multiplies the
@@ -1941,6 +2082,7 @@ void run_ui_tests() {
   test_app_adjust();
   test_app_flourish();
   test_app_sleep_and_settings();
+  test_draw_requests();
   test_timer_cycles();
   test_settings_tree();
   test_net_screens();
