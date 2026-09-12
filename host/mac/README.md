@@ -26,10 +26,10 @@ No Xcode project, no signing, no developer account. `swiftc`, `make`, and a
 Mac — nothing else. `~/Applications` rather than `/Applications` because it
 needs no admin rights and belongs to one user.
 
-On first launch it asks for the panel's address — the one the panel shows for
-twelve seconds after it joins your network, or `GET /api/state` on any address
-you already know. It lives in `UserDefaults`, so change it any time from
-**Panel address…**.
+On first launch it **finds the panel by itself**. There is nothing to type.
+
+If it cannot — and there are networks where it cannot — **Find panel** retries
+and reports what happened, and **Panel address…** still takes one by hand.
 
 ## Permissions
 
@@ -41,6 +41,34 @@ The distinction is the whole reason this approach is worth having: CoreAudio's
 this device*, which is a different question from *what is that process
 recording*. A helper that had to request microphone access in order to notice
 the microphone was busy would be a worse trade than the feature is worth.
+
+## How it finds the panel
+
+Two ways, in this order, because neither works everywhere.
+
+**A UDP broadcast probe** on port 51737. The panel answers with its name and
+address. One packet out, one back; measured at about a second on a home
+network, nearly all of which is the window held open in case a second panel
+answers.
+
+**A sweep of the local /24** if nothing replies. Some networks drop broadcast
+between clients — "AP isolation", common on guest and mesh setups — and on
+those the probe goes nowhere. Asking all 254 addresses for `/api/state` is
+crude, and it works where broadcast does not. Measured at about nine seconds,
+which is a fine price for a fallback and a poor one for a default, so it only
+runs when the probe finds nothing.
+
+More than one panel produces a chooser rather than a silent pick, because
+picking silently would be picking wrongly half the time.
+
+> **Why not mDNS?** It is the obvious answer and it costs more than it looks.
+> mDNS is a managed component in ESP-IDF 5.x, and pulling it in would break the
+> firmware's promise that it builds offline with nothing to download. A correct
+> responder is also considerably more than this — PTR, SRV, TXT and A records,
+> name conflict resolution, and politeness toward every other responder on the
+> segment — to answer one question asked by one helper. The device already runs
+> a hand-written DNS responder for its setup portal, so a second datagram
+> handler was about fifty lines against a dependency.
 
 ## How it watches
 

@@ -16,6 +16,7 @@
 #include "esp_wifi.h"
 #include "captive_dns.h"
 #include "creds.h"
+#include "discovery.h"
 #include "ota.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -650,6 +651,9 @@ static esp_err_t start_server(void) {
 // task, so app_main never waits for a network to come up.
 static void on_got_ip(void* arg, esp_event_base_t base, int32_t id, void* data) {
   start_sntp();
+  // Only in station mode: in setup the device *is* the network, its address is
+  // fixed and printed on the panel, and there is nothing to discover.
+  discovery_start(s_ap_ssid[0] ? s_ap_ssid : "pixelbar", net_ip);
   if (!s_server) {
     if (start_server() == ESP_OK) ESP_LOGI(TAG, "web ui on http://%s", s_ip);
   }

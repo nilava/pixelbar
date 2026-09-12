@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: Controller!
     private var device: Device!
     private var observers: [NSKeyValueObservation] = []
+    private var searching = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
         device = Device(host: Prefs.host)
@@ -28,14 +29,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in self?.rebuildMenu() }
         }
 
-        if Prefs.host.isEmpty { showHostPrompt() }
+        // Look for it rather than asking. The prompt is the fallback, not the
+        // greeting: a device that announced its own address for twelve seconds
+        // when it joined the network should not then make you read it off a
+        // scrolling 24-pixel panel and type it back in.
+        if Prefs.host.isEmpty { Task { await autoFind(announce: false) } }
     }
 
     private func rebuildMenu() {
         let menu = NSMenu()
 
         let state: String
-        if controller.paused {
+        if searching {
+            state = "Looking for the panel…"
+        } else if controller.paused {
             state = "Paused"
         } else if let p = controller.pushed {
             state = "Showing \(p.label)"
@@ -83,7 +90,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(setItem)
         menu.addItem(.separator())
 
-        let hostItem = NSMenuItem(title: "Panel address…", action: #selector(showHostPrompt), keyEquivalent: "")
+        let findItem = NSMenuItem(title: "Find panel", action: #selector(findPanel), keyEquivalent: "")
+        findItem.target = self
+        menu.addItem(findItem)
+
+        let hostTitle = Prefs.host.isEmpty ? "Panel address…" : "Panel address: \(Prefs.host)"
+        let hostItem = NSMenuItem(title: hostTitle, action: #selector(showHostPrompt), keyEquivalent: "")
         hostItem.target = self
         menu.addItem(hostItem)
 
@@ -103,6 +115,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func pick(_ sender: NSMenuItem) {
         guard let s = Status(rawValue: sender.tag) else { return }
         Task { await controller.send(s) }
+    }
+
+    @objc private func findPanel() { Task { await autoFind(announce: true) } }
+
+    /// Broadcast, then sweep, then ask. `announce` is false at startup so a
+    /// first launch on a network with no panel on it is quiet rather than
+    /// greeting you with a failure.
+    private func autoFind(announce: Bool) async {
+        searching = true
+        rebuildMenu()
+        let found = await Discovery.find()
+        searching = false
+
+        if found.count == 1 {
+            await controller.setHost(found[0].ip)
+            rebuildMenu()
+            if announce { note("Found the panel at \(found[0].ip).") }
+            return
+        }
+        if found.count > 1 {
+            // More than one is a real situation once there are two of these on
+            // a desk, and picking silently would be picking wrongly half the
+            // time.
+            let a = NSAlert()
+            a.messageText = "More than one panel"
+            a.informativeText = "Choose which one this Mac should drive."
+            let pop = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 25))
+            for f in found { pop.addItem(withTitle: "\(f.name) — \(f.ip)") }
+            a.accessoryView = pop
+            a.addButton(withTitle: "Use this one")
+            a.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            if a.runModal() == .alertFirstButtonReturn {
+                await controller.setHost(found[pop.indexOfSelectedItem].ip)
+                rebuildMenu()
+            }
+            return
+        }
+        if announce {
+            note("No panel answered. Check it is powered and on this network, "
+                 + "or enter its address by hand.")
+        }
+        if Prefs.host.isEmpty && announce { showHostPrompt() }
+    }
+
+    private func note(_ text: String) {
+        let a = NSAlert()
+        a.messageText = "Pixelbar"
+        a.informativeText = text
+        NSApp.activate(ignoringOtherApps: true)
+        a.runModal()
     }
 
     @objc private func showHostPrompt() {
