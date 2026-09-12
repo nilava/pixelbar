@@ -63,6 +63,10 @@ struct Ports {
   // Must outlive the frame; on the device it is a static buffer in `net`.
   virtual const char* net_text() { return ""; }
 
+  // Why the last join failed, or an empty string. Must outlive the frame; on
+  // the device it is a static buffer in `net`, like net_text.
+  virtual const char* net_error() { return ""; }
+
   // How far through a firmware update, 0..1, or negative when none is running.
   // The panel takes this over everything else while it is not negative: an
   // update is the one state where what the device is doing matters more than

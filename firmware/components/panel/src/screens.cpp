@@ -118,6 +118,7 @@ const char* screen_name(Screen s) {
     case Screen::WifiSetup: return "wifisetup";
     case Screen::WifiConnecting: return "wificonnecting";
     case Screen::WifiInfo: return "wifiinfo";
+    case Screen::WifiFailed: return "wififailed";
     case Screen::OtaProgress: return "ota";
     case Screen::Pairing: return "pairing";
     case Screen::Draw: return "draw";
@@ -770,6 +771,33 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       const float drift = a.phase(60.0f) * kWidth;
       draw_icon_aa(fb, drift - 4.0f, 0.0f, kIconMoon, moon);
       draw_icon_aa(fb, drift - 4.0f + kWidth, 0.0f, kIconMoon, moon);
+      break;
+    }
+
+    case Screen::WifiFailed: {
+      // The refusal, and the reason, because the reason is the whole content.
+      //
+      // "Wrong password" and "no such network (2.4 GHz only?)" call for
+      // completely different next actions, and a panel that only said "failed"
+      // would send somebody to retype a password that was right. The helper
+      // shows this too; this is for when nobody is looking at a helper.
+      const RGB bad(255, 60, 40);
+      const float k = 0.6f + 0.4f * a.wave(1.6f);
+      const RGB lit = bad.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
+      // The same signal mark as its neighbours, struck through: the shape says
+      // which subject this is about before the text has scrolled anywhere.
+      for (int arc = 0; arc < 3; ++arc) {
+        const int r = 2 + arc * 2;
+        for (int i = 0; i <= r; ++i) {
+          const float th = 1.5708f * (float)i / (float)r;
+          const int x = static_cast<int>(r * std::sin(th) + 0.5f);
+          const int y = 7 - static_cast<int>(r * std::cos(th) + 0.5f);
+          fb.set(x, y, bad.scaled(40));
+        }
+      }
+      for (int i = 0; i < 6; ++i) fb.set(i, 7 - i, lit);
+      const char* why = ui.net_error && ui.net_error[0] ? ui.net_error : "FAILED";
+      draw_marquee(fb, a, why, 8, kWidth - 8, 1, lit);
       break;
     }
 

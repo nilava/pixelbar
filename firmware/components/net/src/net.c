@@ -119,6 +119,7 @@ static esp_timer_handle_t s_ap_down_timer = NULL;
 // whether it worked, and that is what the panel should say.
 net_mode_t net_mode(void) { return s_trying ? NET_MODE_JOINING : s_mode; }
 const char* net_setup_ssid(void) { return s_ap_ssid; }
+const char* net_error(void) { return s_try_error; }
 
 // The one string the panel shows, chosen by what the device is doing: the
 // network to join, the network being tried, or the address to visit. Decided

@@ -40,6 +40,7 @@ class DevicePorts : public ui::Ports {
   bool wifi_connected() override;
   ui::Ports::NetMode net_mode() override;
   const char* net_text() override;
+  const char* net_error() override;
 
   // Pushed in from main, for the same reason as the clock: this component
   // knows nothing about the radio.

@@ -180,6 +180,31 @@ void App::update(float dt_s, double now_s) {
         (void)was;
       }
     }
+    // A join someone asked for was refused.
+    //
+    // Driven by the reason changing rather than by the mode, because a failed
+    // join ends where it started — back in setup — and the mode is therefore
+    // the same before and after. The pointer is compared, not the string: the
+    // network component rewrites one static buffer, so a new reason is a new
+    // value in the same place and a *cleared* one is the empty string.
+    const char* err = ports_->net_error();
+    const bool have_err = err && err[0];
+    if (have_err && net_watching_ && !booting_ && err != net_error_shown_) {
+      net_error_shown_ = err;
+      ui_.net_error = err;
+      show_net(panel::Screen::WifiFailed);
+      net_info_s_ = kNetErrorSeconds;
+    } else if (!have_err) {
+      // The next attempt has started. Arm it again, so a second wrong password
+      // is reported as loudly as the first.
+      net_error_shown_ = nullptr;
+    }
+    if (net_info_s_ > 0.0f && screen() == panel::Screen::WifiFailed) {
+      net_info_s_ -= dt_s;
+      // Back to the screen that says how to try again, not to the clock.
+      if (net_info_s_ <= 0.0f) show_net(panel::Screen::WifiSetup);
+    }
+
     // The address screen is a notice, not a destination.
     if (net_info_s_ > 0.0f && screen() == panel::Screen::WifiInfo) {
       net_info_s_ -= dt_s;

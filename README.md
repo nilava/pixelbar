@@ -127,8 +127,8 @@ targets, and the colour picker has a specular band travelling its ramp.
 
 ## Settings
 
-The menu is the settings tree, scrolled like a record. Seven groups, fourteen
-settings, and everything the device stores is reachable from the knob.
+The menu is the settings tree, scrolled like a record. Ten groups, and
+everything the device stores or is paired with is reachable from the knob.
 
 | Group | Settings |
 | --- | --- |
@@ -139,6 +139,20 @@ settings, and everything the device stores is reachable from the knob.
 | **TILT** | motion gestures on/off, lay-flat-to-sleep |
 | **TAP** | touch lock |
 | **CLCK** | 12 or 24 hour |
+| **WIFI** | **IP** shows the address, **DROP** forgets the network |
+| **HOST** | **ADD** opens a pairing window, **LIST** shows who is paired, **DROP** forgets them all |
+| **SYS** | **WIPE** — tokens, bonds and network, then a restart into setup |
+
+DROP forgets one thing and WIPE forgets everything; the group says what the
+thing is. Every one of them asks first, on a screen that opens on *no* — the
+knob has no undo.
+
+**HOST** is the group worth knowing about. The panel is driven over HTTP by
+hosts holding a token, and over Bluetooth by hosts that have bonded; **LIST**
+is the one place the device says who those are, by the name each gave when it
+paired. **SYS → WIPE** exists because the alternative was an authenticated
+request from a host that was already paired — so a panel whose Mac had gone,
+been re-imaged, or would not pair had no way back at all.
 
 | | |
 | --- | --- |

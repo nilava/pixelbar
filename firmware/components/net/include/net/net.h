@@ -85,6 +85,13 @@ const char* net_setup_ssid(void);
 // join, the network being tried, or the address. Never null.
 const char* net_panel_text(void);
 
+// Why the last join asked for during setup failed, or an empty string.
+//
+// Cleared when the next attempt starts, so it describes the most recent try
+// and nothing older. The helper already shows this; the panel needs it for the
+// case where nobody is looking at a helper.
+const char* net_error(void);
+
 // -1 when no update is in flight, otherwise 0..1. The panel shows a progress
 // screen whenever this is not negative.
 float net_ota_progress(void);

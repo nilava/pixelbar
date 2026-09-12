@@ -100,7 +100,8 @@ enum class Screen : uint8_t {
   // these are states the device is in, not views you choose between.
   WifiSetup,       // no credentials: join this network and open the page
   WifiConnecting,  // trying the credentials someone just typed
-  WifiInfo,        // the address, so you can reach the page from your own network
+  WifiInfo,
+  WifiFailed,      // that network said no, and why        // the address, so you can reach the page from your own network
   OtaProgress,     // a firmware update is being written; do not unplug it
   Pairing,         // the six digits a Bluetooth host must be told
   Draw,            // whatever a host asked the panel to show
@@ -197,6 +198,9 @@ struct UiState {
 
   // The confirm screen: what is about to happen, and which way the cursor is
   // pointing. Defaulting to no is the whole point.
+  // Why a join was refused. Borrowed, like net_text.
+  const char* net_error = "";
+
   const char* confirm_label = "";
   bool confirm_yes = false;
 

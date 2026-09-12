@@ -316,6 +316,9 @@ bool DevicePorts::take_draw(ui::DrawPayload* out) {
 
 ui::Ports::NetMode DevicePorts::net_mode() { return net_mode_; }
 const char* DevicePorts::net_text() { return net_text_; }
+// The global, not this method. Without the scope it calls itself forever, and
+// the compiler is perfectly happy with that.
+const char* DevicePorts::net_error() { return ::net_error(); }
 
 // Straight through to the network component. These run on the render loop, not
 // on the server's task, which is the one difference from every other path into

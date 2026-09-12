@@ -81,6 +81,10 @@ class App {
   // dotted quad off a scrolling panel and type it in, short enough that the
   // device does not sit on a notice forever.
   static constexpr float kNetInfoSeconds = 12.0f;
+  // Longer than the address notice. An address you can look up again; a
+  // reason, once it has scrolled past, is gone — and the text is long enough
+  // that a short window would only show half of it.
+  static constexpr float kNetErrorSeconds = 20.0f;
 
   // What a draw request has to outrank to take the panel.
   //
@@ -190,7 +194,7 @@ class App {
   // True for the three network notices, which share a way in and a way out.
   static bool is_net_screen(panel::Screen s) {
     return s == panel::Screen::WifiSetup || s == panel::Screen::WifiConnecting ||
-           s == panel::Screen::WifiInfo;
+           s == panel::Screen::WifiInfo || s == panel::Screen::WifiFailed;
   }
   // Whether the person in front of the panel is following a setup they
   // started. Set when setup mode begins and cleared once an address arrives,
@@ -199,6 +203,9 @@ class App {
   bool net_watching_ = false;
   Ports::NetMode net_mode_ = Ports::NetMode::Online;
   float net_info_s_ = 0.0f;
+  // The refusal already shown, so one failed join says so once rather than
+  // every frame for as long as the reason sits in the network component.
+  const char* net_error_shown_ = nullptr;
 
   // What the confirm screen will do if you answer yes. SettingId::Count means
   // nothing is pending, which is also what a cancelled confirm leaves behind.

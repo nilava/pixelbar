@@ -810,6 +810,8 @@ class TestPorts : public Ports {
   bool draw_pending = false;
   int64_t epoch = 1789000000;
   const char* net_text() override { return text; }
+  const char* net_error() override { return error; }
+  const char* error = "";
 
   ui::Ports::NetMode mode = ui::Ports::NetMode::Online;
   const char* text = "";
@@ -1207,14 +1209,14 @@ void test_app_adjust() {
     // confirm that fires on no is worse than no confirm at all — it looks
     // safe.
     AppRig r;
-    r.enter("LINK", "CLR");
+    r.enter("HOST", "DROP");
     CHECK_EQ(static_cast<int>(r.app.screen()),
              static_cast<int>(panel::Screen::Confirm));
     r.press();
     r.settle();
     CHECK_EQ(r.ports.forget_host_calls, 0);
 
-    r.enter("LINK", "CLR");
+    r.enter("HOST", "DROP");
     r.turn(1);
     CHECK(r.app.state().confirm_yes);
     r.press();
@@ -1227,6 +1229,39 @@ void test_app_adjust() {
     CHECK_EQ(r.ports.forget_host_calls, 1);
   }
 
+  CASE("a refused network says why, on the panel");
+  {
+    // The reason is the content. "Wrong password" and "no such network
+    // (2.4 GHz only?)" call for completely different next actions, and a panel
+    // that only said "failed" would send somebody to retype a password that
+    // was right.
+    AppRig r(true, ui::Ports::NetMode::Setup);
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::WifiSetup));
+
+    r.ports.error = "wrong password";
+    r.run(0.2f);
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::WifiFailed));
+    CHECK(std::string(r.app.state().net_error) == "wrong password");
+
+    // It is a notice, not a destination, and what it returns to is the screen
+    // that says how to try again rather than the clock.
+    r.run(21.0f);
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::WifiSetup));
+
+    // The next attempt clears it, and a second refusal is reported as loudly
+    // as the first — one failed join must not be announced forever, and two
+    // must not be announced once.
+    r.ports.error = "";
+    r.run(0.2f);
+    r.ports.error = "no such network (2.4 GHz only?)";
+    r.run(0.2f);
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::WifiFailed));
+  }
+
   CASE("the panel can erase itself, but only on purpose");
   {
     // The way back for a panel whose paired host is gone. It has to be
@@ -1234,7 +1269,7 @@ void test_app_adjust() {
     // overshooting, which is why it sits in a group of its own behind a
     // confirm that opens on no.
     AppRig r;
-    r.enter("SYS", "RSET");
+    r.enter("SYS", "WIPE");
     CHECK_EQ(static_cast<int>(r.app.screen()),
              static_cast<int>(panel::Screen::Confirm));
     CHECK(!r.app.state().confirm_yes);
@@ -1242,7 +1277,7 @@ void test_app_adjust() {
     r.settle();
     CHECK_EQ(r.ports.factory_calls, 0);
 
-    r.enter("SYS", "RSET");
+    r.enter("SYS", "WIPE");
     r.turn(1);
     r.press();
     r.settle();
@@ -1271,7 +1306,7 @@ void test_app_adjust() {
   CASE("a confirm answers on any turn, not on a count of them");
   {
     AppRig r;
-    r.enter("NET", "FGET");
+    r.enter("WIFI", "DROP");
     CHECK(!r.app.state().confirm_yes);
     r.turn(3);   // a fast sweep is still one answer
     CHECK(r.app.state().confirm_yes);
@@ -1285,7 +1320,7 @@ void test_app_adjust() {
   CASE("pairing opens a window and steps out of the menu");
   {
     AppRig r;
-    r.enter("LINK", "PAIR");
+    r.enter("HOST", "ADD");
     CHECK_EQ(r.ports.pair_calls, 1);
     r.settle();
     CHECK_EQ(r.app.depth(), 1);
@@ -1298,7 +1333,7 @@ void test_app_adjust() {
     // past the end, a full one wrapping at the wrong length.
     AppRig r;
     r.ports.pairs = 0;
-    r.enter("LINK", "SEEN");
+    r.enter("HOST", "LIST");
     CHECK_EQ(static_cast<int>(r.app.screen()),
              static_cast<int>(panel::Screen::Paired));
     CHECK_EQ(r.app.state().paired_count, 0);
@@ -1310,7 +1345,7 @@ void test_app_adjust() {
 
     AppRig f;
     f.ports.pairs = 8;
-    f.enter("LINK", "SEEN");
+    f.enter("HOST", "LIST");
     CHECK_EQ(f.app.state().paired_count, 8);
     for (int i = 0; i < 8; ++i) {
       CHECK_EQ(f.app.state().paired_index, i);

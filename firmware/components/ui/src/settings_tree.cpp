@@ -108,19 +108,25 @@ const SettingDesc kClockItems[] = {
   {ROW(icon, label, colour), SettingId::id_, SettingKind::Action,           \
    panel::Screen::Count, 0, 0, 0, "", nullptr, 0}
 
+// Four or five characters have to carry a whole verb, so they are chosen to
+// read as one vocabulary rather than as abbreviations of unrelated words:
+// DROP forgets one thing, WIPE forgets everything, and the group says what the
+// thing is. "FGET" and "CLR" and "SEEN" were none of that — they were what was
+// left after squeezing, and needed explaining, which a label that needs
+// explaining has already failed at.
 const SettingDesc kNetItems[] = {
-    {ROW(kIconInfo, "ADDR", kNet), SettingId::Count, SettingKind::Screen,
+    {ROW(kIconInfo, "IP", kNet), SettingId::Count, SettingKind::Screen,
      panel::Screen::WifiInfo, 0, 0, 0, "", nullptr, 0},
     // Forgetting the network is how a panel moves house, and the only way back
     // in afterwards is the setup AP or Bluetooth — hence the confirm.
-    ACTION(kIconCross, "FGET", kNet, ActionForgetWifi),
+    ACTION(kIconCross, "DROP", kNet, ActionForgetWifi),
 };
 
 const SettingDesc kLinkItems[] = {
-    ACTION(kIconDownload, "PAIR", kLink, ActionPair),
-    {ROW(kIconGrid, "SEEN", kLink), SettingId::Count, SettingKind::Screen,
+    ACTION(kIconDownload, "ADD", kLink, ActionPair),
+    {ROW(kIconGrid, "LIST", kLink), SettingId::Count, SettingKind::Screen,
      panel::Screen::Paired, 0, 0, 0, "", nullptr, 0},
-    ACTION(kIconCross, "CLR", kLink, ActionForgetHosts),
+    ACTION(kIconCross, "DROP", kLink, ActionForgetHosts),
 };
 
 // Its own group, and last.
@@ -130,7 +136,7 @@ const SettingDesc kLinkItems[] = {
 // password and the other costs you every pairing on every host. A group of its
 // own means reaching it is a decision rather than an overshoot.
 const SettingDesc kSystemItems[] = {
-    ACTION(kIconWarning, "RSET", kSystem, ActionFactory),
+    ACTION(kIconWarning, "WIPE", kSystem, ActionFactory),
 };
 
 #define GROUP(row_, items_) \
@@ -147,8 +153,10 @@ const SettingGroup kGroups[] = {
     GROUP(ROW(kIconMotion, "TILT", kMotion), kMotionItems),
     GROUP(ROW(kIconHand, "TAP", kTouch), kTouchItems),
     GROUP(SPIN(kIconGear, "CLCK", kClock), kClockItems),
-    GROUP(ROW(kIconDownload, "NET", kNet), kNetItems),
-    GROUP(ROW(kIconLock, "LINK", kLink), kLinkItems),
+    GROUP(ROW(kIconDownload, "WIFI", kNet), kNetItems),
+    // HOST rather than LINK: what this group manages is the machines allowed
+    // to drive the panel, and "link" named the transport instead of the thing.
+    GROUP(ROW(kIconLock, "HOST", kLink), kLinkItems),
     GROUP(ROW(kIconWarning, "SYS", kSystem), kSystemItems),
 };
 const int kGroupCount = static_cast<int>(sizeof(kGroups) / sizeof(kGroups[0]));
