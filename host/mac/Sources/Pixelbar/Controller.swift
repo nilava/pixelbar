@@ -82,6 +82,7 @@ final class Controller: ObservableObject {
     private let device: Device
     private let ble = BLETransport()
     private let calendars = Calendars()
+    private(set) lazy var onboarding = Onboarding(ble: ble)
     private var mic: MicMonitor?
     /// What was last put on the panel, so it is only re-sent when it changes.
     /// A draw request every five seconds would restart the scroll each time.
@@ -353,6 +354,17 @@ final class Controller: ObservableObject {
     /// panel, type it back, keep what comes out. One gesture whichever
     /// transport is carrying it, rather than two unrelated ones.
     func beginWifiPairing() async -> Bool { await device.beginPairing() }
+
+    /// Everything setup produced, in one place: the panel's address and this
+    /// Mac's own token. Stored together because they are learned together.
+    func adopt(token: String, ip: String) async {
+        Prefs.token = token
+        Prefs.host = ip
+        await device.setHost(ip)
+        await device.setToken(token)
+        await refreshSetup()
+        await evaluate()
+    }
 
     func redeemWifiCode(_ code: Int) async -> Bool {
         guard let t = await device.redeem(code) else { return false }

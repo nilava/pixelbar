@@ -19,6 +19,12 @@ uint32_t auth_pairing_code(void);
 // never stored anywhere else and never logged.
 bool auth_redeem(uint32_t code, const char* name, const char** token_out);
 
+// Mints a token with no code, for a link that is already authenticated.
+// Only the Bluetooth path may use this: the passkey ceremony has already
+// proved the host was standing in front of the panel, and asking a second
+// time would be asking the same question twice.
+bool auth_issue(const char* name, const char** token_out);
+
 // Whether there is room for another client.
 bool auth_full(void);
 

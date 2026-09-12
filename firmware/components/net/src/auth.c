@@ -201,6 +201,32 @@ bool auth_redeem(uint32_t code, const char* name, const char** token_out) {
   return true;
 }
 
+bool auth_issue(const char* name, const char** token_out) {
+  // No code, and deliberately so.
+  //
+  // This is the Bluetooth path, where the passkey ceremony has already
+  // happened: the link is encrypted *and authenticated*, which means the host
+  // read six digits off a panel it was standing in front of. Asking for a
+  // second code over that link would be asking the same question twice and
+  // calling it security. The characteristic that reaches this is AUTHEN-gated,
+  // so there is no way in here without having done it.
+  if (s_clients.count >= AUTH_MAX_CLIENTS) {
+    ESP_LOGW(TAG, "no room: %d clients already paired", AUTH_MAX_CLIENTS);
+    return false;
+  }
+  auth_client_t* c = &s_clients.c[s_clients.count++];
+  memset(c, 0, sizeof(*c));
+  make_token(c->token);
+  snprintf(c->name, sizeof(c->name), "%s", (name && name[0]) ? name : "host");
+  const time_t now = time(NULL);
+  c->issued = (now > 1600000000) ? (uint32_t)now : 0;
+  save();
+  *token_out = c->token;
+  ESP_LOGI(TAG, "issued over bluetooth to \"%s\" (%u of %d)", c->name,
+           s_clients.count, AUTH_MAX_CLIENTS);
+  return true;
+}
+
 bool auth_full(void) { return s_clients.count >= AUTH_MAX_CLIENTS; }
 
 bool auth_ok(const char* presented) {

@@ -13,6 +13,11 @@ enum BLEIDs {
     static let service = CBUUID(string: "00006F9A-0001-5E4B-A311-4E7D0C216F9A")
     static let command = CBUUID(string: "00006F9A-0002-5E4B-A311-4E7D0C216F9A")
     static let state   = CBUUID(string: "00006F9A-0003-5E4B-A311-4E7D0C216F9A")
+    // Onboarding, all four behind the passkey.
+    static let scan    = CBUUID(string: "00006F9A-0004-5E4B-A311-4E7D0C216F9A")
+    static let provision = CBUUID(string: "00006F9A-0005-5E4B-A311-4E7D0C216F9A")
+    static let link    = CBUUID(string: "00006F9A-0006-5E4B-A311-4E7D0C216F9A")
+    static let token   = CBUUID(string: "00006F9A-0007-5E4B-A311-4E7D0C216F9A")
 }
 
 final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
@@ -20,6 +25,7 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
     private var panel: CBPeripheral?
     private var cmdChar: CBCharacteristic?
     private var stateChar: CBCharacteristic?
+    private var chars: [CBUUID: CBCharacteristic] = [:]
     private var poweredOn = false
 
     /// Set when the panel is connected and its command characteristic is known,
@@ -88,6 +94,19 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
     private func endPairingRetries() {
         retryTimer?.cancel()
         retryTimer = nil
+    }
+
+    /// Reads one characteristic; the answer arrives on `onValue`.
+    func read(_ id: CBUUID) {
+        guard let p = panel, let c = chars[id] else { return }
+        p.readValue(for: c)
+    }
+
+    /// Writes JSON to one characteristic, acknowledged.
+    func write(_ id: CBUUID, _ body: [String: Any]) {
+        guard let p = panel, let c = chars[id],
+              let d = try? JSONSerialization.data(withJSONObject: body) else { return }
+        p.writeValue(d, for: c, type: .withResponse)
     }
 
     /// Provokes pairing without changing anything.
@@ -179,12 +198,15 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
 
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
         guard let svc = p.services?.first(where: { $0.uuid == BLEIDs.service }) else { return }
-        p.discoverCharacteristics([BLEIDs.command, BLEIDs.state], for: svc)
+        // All of them: onboarding needs four more, and asking for the whole
+        // service is one round trip rather than five.
+        p.discoverCharacteristics(nil, for: svc)
     }
 
     func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor service: CBService,
                     error: Error?) {
         for c in service.characteristics ?? [] {
+            chars[c.uuid] = c
             if c.uuid == BLEIDs.command { cmdChar = c }
             if c.uuid == BLEIDs.state { stateChar = c }
         }

@@ -735,6 +735,100 @@ static esp_err_t post_input(httpd_req_t* r) {
 // not justify linking cJSON, and everything here is length-checked.
 
 
+// The last scan, kept so a reader does not have to block for one.
+//
+// A scan takes about two seconds. That is tolerable on the HTTP worker, whose
+// whole job is waiting, and not tolerable on the NimBLE host task, which is
+// also running the radio the scan needs. So Bluetooth asks for a scan, gets on
+// with something else, and reads the answer when it arrives.
+static char s_scan_json[1280] = "{\"networks\":[]}";
+static bool s_scan_running = false;
+
+static void scan_into_cache(void) {
+  const bool stand_down = !s_connected;
+  if (stand_down) {
+    s_scanning = true;
+    if (s_retry_timer) esp_timer_stop(s_retry_timer);
+    esp_wifi_disconnect();
+  }
+  wifi_scan_config_t sc = {0};
+  const esp_err_t err = esp_wifi_scan_start(&sc, true);
+  uint16_t n = 0;
+  if (err == ESP_OK) esp_wifi_scan_get_ap_num(&n);
+  if (n > 20) n = 20;
+  wifi_ap_record_t recs[20];
+  if (n) esp_wifi_scan_get_ap_records(&n, recs);
+  if (stand_down) s_scanning = false;
+
+  int at = snprintf(s_scan_json, sizeof(s_scan_json), "{\"networks\":[");
+  for (uint16_t i = 0; i < n; ++i) {
+    char ssid[96];
+    json_escape((const char*)recs[i].ssid, ssid, sizeof(ssid));
+    if (ssid[0] == '\0') continue;
+    const int need = snprintf(NULL, 0, "%s{\"ssid\":\"%s\",\"rssi\":%d,\"open\":%s}",
+                              at > 13 ? "," : "", ssid, recs[i].rssi,
+                              recs[i].authmode == WIFI_AUTH_OPEN ? "true" : "false");
+    if (at + need + 4 > (int)sizeof(s_scan_json)) break;
+    at += snprintf(s_scan_json + at, sizeof(s_scan_json) - at,
+                   "%s{\"ssid\":\"%s\",\"rssi\":%d,\"open\":%s}",
+                   at > 13 ? "," : "", ssid, recs[i].rssi,
+                   recs[i].authmode == WIFI_AUTH_OPEN ? "true" : "false");
+  }
+  snprintf(s_scan_json + at, sizeof(s_scan_json) - at, "]}");
+
+  if (stand_down && !s_trying) esp_wifi_connect();
+}
+
+static void ble_scan_task(void* arg) {
+  scan_into_cache();
+  s_scan_running = false;
+  vTaskDelete(NULL);
+}
+
+void net_request_scan(void) {
+  if (s_scan_running) return;
+  s_scan_running = true;
+  // Its own task: a blocking scan has no business on the caller's, and the
+  // caller here is the Bluetooth host.
+  if (xTaskCreate(ble_scan_task, "ble_scan", 4096, NULL, 3, NULL) != pdPASS)
+    s_scan_running = false;
+}
+
+const char* net_scan_json(void) { return s_scan_json; }
+bool net_scan_running(void) { return s_scan_running; }
+
+// Credentials arriving over an authenticated Bluetooth link. The same join
+// machinery the web form uses, with the same rule: stored only once they work.
+void net_provision(const char* ssid, const char* pass) {
+  if (!ssid || !ssid[0]) return;
+  snprintf(s_try_ssid, sizeof(s_try_ssid), "%s", ssid);
+  snprintf(s_try_pass, sizeof(s_try_pass), "%s", pass ? pass : "");
+  s_try_error[0] = '\0';
+  s_trying = true;
+
+  wifi_config_t wc = {0};
+  strlcpy((char*)wc.sta.ssid, s_try_ssid, sizeof(wc.sta.ssid));
+  strlcpy((char*)wc.sta.password, s_try_pass, sizeof(wc.sta.password));
+  esp_wifi_set_mode(s_ap_ssid[0] ? WIFI_MODE_APSTA : WIFI_MODE_STA);
+  esp_wifi_set_config(WIFI_IF_STA, &wc);
+  if (s_retry_timer) esp_timer_stop(s_retry_timer);
+  esp_wifi_disconnect();
+  esp_wifi_connect();
+  ESP_LOGI(TAG, "trying %s, pushed over bluetooth", s_try_ssid);
+}
+
+int net_link_json(char* out, size_t cap) {
+  char err[112];
+  json_escape(s_try_error, err, sizeof(err));
+  return snprintf(out, cap,
+                  "{\"mode\":\"%s\",\"trying\":%s,\"ip\":\"%s\","
+                  "\"error\":\"%s\",\"scanning\":%s}",
+                  s_mode == NET_MODE_ONLINE ? "online"
+                      : (s_mode == NET_MODE_JOINING ? "joining" : "setup"),
+                  s_trying ? "true" : "false", s_ip, err,
+                  s_scan_running ? "true" : "false");
+}
+
 static esp_err_t get_wifi_scan(httpd_req_t* r) {
   // Blocking, on the server's own task. That is allowed here and not in the
   // event handler: this task exists to wait on things, and a scan is about two

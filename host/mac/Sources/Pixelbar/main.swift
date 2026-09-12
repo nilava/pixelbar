@@ -137,26 +137,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(setItem)
         menu.addItem(.separator())
 
-        let btTitle: String
-        if controller.bluetoothUsable { btTitle = "Bluetooth: paired" }
-        else if controller.bluetoothReady { btTitle = "Pair over Bluetooth…" }
-        else { btTitle = "Bluetooth: no panel in range" }
-        let bt = NSMenuItem(title: btTitle, action: #selector(pairBluetooth), keyEquivalent: "")
-        bt.target = self
-        bt.isEnabled = controller.bluetoothReady && !controller.bluetoothUsable
-        menu.addItem(bt)
+        // No separate "pair over Bluetooth" and "pair over Wi-Fi" entries.
+        // They are one act — see runSetup — and offering them separately
+        // invited doing half of it and wondering why the other half was not
+        // working.
+        let linkLine = NSMenuItem(
+            title: "Link: "
+                + (controller.bluetoothUsable ? "Bluetooth paired" : "Bluetooth not paired")
+                + " · " + (Prefs.token.isEmpty ? "no token" : "token held"),
+            action: nil, keyEquivalent: "")
+        linkLine.isEnabled = false
+        menu.addItem(linkLine)
 
-        if controller.blePairingWanted && !controller.bluetoothUsable {
-            let p = NSMenuItem(title: "Type the code on the panel…", action: nil,
-                               keyEquivalent: "")
-            p.isEnabled = false
-            menu.addItem(p)
-        } else if !controller.bleLog.isEmpty {
-            let l = NSMenuItem(title: "Bluetooth: \(controller.bleLog)", action: nil,
-                               keyEquivalent: "")
-            l.isEnabled = false
-            menu.addItem(l)
-        }
 
         let again = NSMenuItem(title: "Set up again…", action: #selector(runSetup), keyEquivalent: "")
         again.target = self
@@ -183,48 +175,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func runSetup() {
         Task {
             await controller.refreshSetup()
-
-            if Prefs.host.isEmpty {
-                await autoFind(announce: true)
-                if Prefs.host.isEmpty { return }   // autoFind already explained
-            }
-
-            await controller.refreshSetup()
             if controller.isReady {
                 note("Already set up — the panel is at \(Prefs.host).")
-                rebuildMenu()
                 return
             }
-
-            guard await controller.beginWifiPairing() else {
-                note("Found the panel at \(Prefs.host) but could not ask it to "
-                     + "pair.\n\nIs it still on this network?")
-                return
-            }
-            let a = NSAlert()
-            a.messageText = "Pair with the panel"
-            a.informativeText = "It is showing six digits. Type them here.\n\n"
-                + "The code exists nowhere else, so a Mac that can produce it "
-                + "is a Mac in the room."
-            let f = NSTextField(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
-            f.placeholderString = "000000"
-            a.accessoryView = f
-            a.addButton(withTitle: "Pair")
-            a.addButton(withTitle: "Cancel")
-            NSApp.activate(ignoringOtherApps: true)
-            guard a.runModal() == .alertFirstButtonReturn,
-                  let code = Int(f.stringValue.trimmingCharacters(in: .whitespaces))
-            else { rebuildMenu(); return }
-
-            if await controller.redeemWifiCode(code) {
-                note("Paired. Pixelbar will set your status when your microphone "
-                     + "or camera opens.")
-            } else {
-                note("That code was wrong or had expired.\n\nThe code lasts a "
-                     + "minute and allows three tries; run setup again for a new one.")
-            }
+            await runBluetoothSetup()
             rebuildMenu()
         }
+    }
+
+    /// Bluetooth first, because it needs nothing: no network, no address, no
+    /// discovery. One passkey authorises both transports — the panel hands the
+    /// API token across the link the passkey just secured. If Bluetooth cannot
+    /// be reached at all, fall back to finding the panel on the network.
+    private func runBluetoothSetup() async {
+        let who = Host.current().localizedName ?? "Mac"
+        let result = await controller.onboarding.run(name: who) { nets in
+            await self.askForNetwork(nets)
+        }
+        if let r = result {
+            await controller.adopt(token: r.token, ip: r.ip)
+            note("Set up. The panel is at \(r.ip), and this Mac is paired over "
+                 + "Bluetooth and holds a Wi-Fi token — from the one code you typed.")
+            return
+        }
+        if case .failed(let why) = controller.onboarding.step {
+            note("Bluetooth setup did not finish: \(why).\n\nTrying over Wi-Fi.")
+        }
+        await runWifiSetup()
+    }
+
+    /// The panel stays connected over Bluetooth while this is up, so nothing
+    /// times out while somebody reads the list.
+    @MainActor
+    private func askForNetwork(_ nets: [Network]) async -> (ssid: String, pass: String)? {
+        let a = NSAlert()
+        a.messageText = "Which network?"
+        a.informativeText = "The panel can see these, and will join whichever you pick."
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 58))
+        let pop = NSPopUpButton(frame: NSRect(x: 0, y: 30, width: 260, height: 25))
+        for n in nets {
+            let bars = n.rssi > -55 ? "●●●" : (n.rssi > -70 ? "●●○" : "●○○")
+            pop.addItem(withTitle: n.ssid + "  " + bars + (n.open ? "" : " 🔒"))
+        }
+        let pass = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        pass.placeholderString = "Password (leave empty if open)"
+        box.addSubview(pop)
+        box.addSubview(pass)
+        a.accessoryView = box
+        a.addButton(withTitle: "Join")
+        a.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard a.runModal() == .alertFirstButtonReturn,
+              pop.indexOfSelectedItem >= 0, pop.indexOfSelectedItem < nets.count
+        else { return nil }
+        return (nets[pop.indexOfSelectedItem].ssid, pass.stringValue)
+    }
+
+    private func runWifiSetup() async {
+        if Prefs.host.isEmpty {
+            await autoFind(announce: true)
+            if Prefs.host.isEmpty { return }
+        }
+        guard await controller.beginWifiPairing() else {
+            note("Found the panel at \(Prefs.host) but could not ask it to pair.")
+            return
+        }
+        let a = NSAlert()
+        a.messageText = "Pair with the panel"
+        a.informativeText = "It is showing six digits. Type them here."
+        let f = NSTextField(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
+        f.placeholderString = "000000"
+        a.accessoryView = f
+        a.addButton(withTitle: "Pair")
+        a.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard a.runModal() == .alertFirstButtonReturn,
+              let code = Int(f.stringValue.trimmingCharacters(in: .whitespaces))
+        else { return }
+        if await controller.redeemWifiCode(code) { note("Paired over Wi-Fi.") }
+        else { note("That code was wrong or had expired.") }
     }
 
     @objc private func togglePause() { controller.paused.toggle(); rebuildMenu() }
@@ -252,43 +282,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func findPanel() { Task { await autoFind(announce: true) } }
 
-    @objc private func pairBluetooth() {
-        Task {
-            if controller.bluetoothUsable {
-                note("Already paired over Bluetooth.")
-                return
-            }
-            controller.blePairingWanted = false
-            await controller.pair()
-
-            // Deliberately not a modal.
-            //
-            // This used to put up a blocking alert the moment the device
-            // refused us — while macOS was trying to show its own passkey
-            // dialog for the same event. Two dialogs competing, one of them
-            // holding the main thread in runModal(), is what made pairing
-            // "error before I could enter the code". The system dialog is the
-            // one that matters; this stays out of its way and reports the
-            // outcome in the menu, which the transport now actually knows
-            // because it retries until the link comes up.
-            rebuildMenu()
-
-            for _ in 0..<40 {
-                if controller.bluetoothUsable { break }
-                try? await Task.sleep(for: .milliseconds(500))
-                rebuildMenu()
-            }
-            rebuildMenu()
-            if !controller.bluetoothUsable && !controller.blePairingWanted {
-                note("The panel did not answer over Bluetooth."
-                     + (controller.bleLog.isEmpty ? "" : "\n\n\(controller.bleLog)"))
-            }
-        }
-    }
-
-    /// Broadcast, then sweep, then ask. `announce` is false at startup so a
-    /// first launch on a network with no panel on it is quiet rather than
-    /// greeting you with a failure.
     private func autoFind(announce: Bool) async {
         searching = true
         rebuildMenu()

@@ -43,6 +43,12 @@ extern void ble_store_config_init(void);
 // Declared in net.c: one parser and one state builder, shared with HTTP.
 int net_apply_input_json(const char* body);
 int net_state_json(char* out, size_t cap);
+void net_request_scan(void);
+const char* net_scan_json(void);
+void net_provision(const char* ssid, const char* pass);
+int net_link_json(char* out, size_t cap);
+bool auth_issue(const char* name, const char** token_out);
+const char* net_ip(void);
 
 // 6f9a0001-… — a random base, with the last 16 bits naming each attribute.
 // Nothing here is standard, so nothing here pretends to be: a made-up service
@@ -57,9 +63,59 @@ static const ble_uuid128_t kStateUuid =
     BLE_UUID128_INIT(0x9a, 0x6f, 0x21, 0x0c, 0x7d, 0x4e, 0x11, 0xa3,
                      0x4b, 0x5e, 0x03, 0x00, 0x9a, 0x6f, 0x00, 0x00);
 
+// Onboarding. All four require an authenticated link, so none of them is
+// reachable without the passkey — which is what makes handing over an API
+// token across this link reasonable.
+static const ble_uuid128_t kScanUuid =
+    BLE_UUID128_INIT(0x9a, 0x6f, 0x21, 0x0c, 0x7d, 0x4e, 0x11, 0xa3,
+                     0x4b, 0x5e, 0x04, 0x00, 0x9a, 0x6f, 0x00, 0x00);
+static const ble_uuid128_t kProvUuid =
+    BLE_UUID128_INIT(0x9a, 0x6f, 0x21, 0x0c, 0x7d, 0x4e, 0x11, 0xa3,
+                     0x4b, 0x5e, 0x05, 0x00, 0x9a, 0x6f, 0x00, 0x00);
+static const ble_uuid128_t kLinkUuid =
+    BLE_UUID128_INIT(0x9a, 0x6f, 0x21, 0x0c, 0x7d, 0x4e, 0x11, 0xa3,
+                     0x4b, 0x5e, 0x06, 0x00, 0x9a, 0x6f, 0x00, 0x00);
+static const ble_uuid128_t kTokenUuid =
+    BLE_UUID128_INIT(0x9a, 0x6f, 0x21, 0x0c, 0x7d, 0x4e, 0x11, 0xa3,
+                     0x4b, 0x5e, 0x07, 0x00, 0x9a, 0x6f, 0x00, 0x00);
+
 static uint8_t s_addr_type;
 static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_state_handle;
+static uint16_t s_link_handle;
+// What the connected host calls itself, and the token minted for it. Both are
+// per-connection: a name means nothing after the host has gone, and a token
+// minted once must not be minted again on a reconnect.
+static char s_peer_name[20] = {0};
+static char s_conn_token[33] = {0};
+
+// The same deliberately small string parser the HTTP side uses. One JSON
+// object of three keys does not justify linking cJSON on either transport.
+static bool ble_json_str(const char* body, const char* key, char* out, size_t cap) {
+  const char* p = strstr(body, key);
+  if (!p) return false;
+  p = strchr(p + strlen(key), ':');
+  if (!p) return false;
+  while (*p && *p != '"') ++p;
+  if (*p != '"') return false;
+  ++p;
+  size_t n = 0;
+  while (*p && *p != '"' && n + 1 < cap) {
+    if (*p == '\\' && p[1]) {
+      ++p;
+      char c = *p;
+      if (c == 'n') c = '\n';
+      else if (c == 't') c = '\t';
+      out[n++] = c;
+      ++p;
+      continue;
+    }
+    out[n++] = *p++;
+  }
+  if (*p != '"') return false;
+  out[n] = '\0';
+  return true;
+}
 static char s_name[24] = "Pixelbar";
 
 // The six digits currently on the panel, or 0 for "not pairing".
@@ -101,6 +157,68 @@ static int on_state(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt* c
   return os_mbuf_append(ctxt->om, buf, n) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
 }
 
+// A scan is asked for by reading this: the read returns whatever the last one
+// found, and starts a fresh one in the background. So the first read of a
+// session is usually empty and the second, a couple of seconds later, is not.
+// Blocking here instead would stall the Bluetooth host task for the two
+// seconds the scan needs — on the radio the scan is using.
+static int on_scan(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt* ctxt,
+                   void* arg) {
+  const char* j = net_scan_json();
+  net_request_scan();
+  return os_mbuf_append(ctxt->om, j, strlen(j)) == 0
+             ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+// {"ssid":"…","pass":"…","name":"Nilava's Mac"} — credentials and who is
+// sending them, in one write, because they are one intention.
+static int on_prov(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt* ctxt,
+                   void* arg) {
+  char body[192];
+  uint16_t got = 0;
+  if (ble_hs_mbuf_to_flat(ctxt->om, body, sizeof(body) - 1, &got) != 0)
+    return BLE_ATT_ERR_UNLIKELY;
+  body[got] = '\0';
+
+  char ssid[33] = {0}, pass[65] = {0};
+
+  // The name is taken whether or not credentials came with it, so a host can
+  // introduce itself, collect a token, and leave the network alone.
+  ble_json_str(body, "\"name\"", s_peer_name, sizeof(s_peer_name));
+
+  if (!ble_json_str(body, "\"ssid\"", ssid, sizeof(ssid)) || ssid[0] == '\0')
+    return 0;
+  // An absent password is an open network, not an error.
+  ble_json_str(body, "\"pass\"", pass, sizeof(pass));
+  net_provision(ssid, pass);
+  return 0;
+}
+
+static int on_link(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt* ctxt,
+                   void* arg) {
+  char buf[320];
+  const int n = net_link_json(buf, sizeof(buf));
+  return os_mbuf_append(ctxt->om, buf, n) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+// The API token, handed across a link that is already authenticated.
+//
+// Minted once per connection and cached: a read that minted every time would
+// fill the eight client slots with copies of one host that simply asked twice.
+static int on_token(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt* ctxt,
+                    void* arg) {
+  if (s_conn_token[0] == '\0') {
+    const char* t = NULL;
+    if (!auth_issue(s_peer_name[0] ? s_peer_name : "bluetooth host", &t))
+      return BLE_ATT_ERR_INSUFFICIENT_RES;  // no room; the panel says who holds it
+    snprintf(s_conn_token, sizeof(s_conn_token), "%s", t);
+  }
+  char buf[96];
+  const int n = snprintf(buf, sizeof(buf), "{\"token\":\"%s\",\"ip\":\"%s\"}",
+                         s_conn_token, net_ip());
+  return os_mbuf_append(ctxt->om, buf, n) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
 static const struct ble_gatt_svc_def kServices[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
@@ -134,6 +252,31 @@ static const struct ble_gatt_svc_def kServices[] = {
                 // authenticates nobody.
                 .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC |
                          BLE_GATT_CHR_F_WRITE_AUTHEN,
+            },
+            {
+                .uuid = &kScanUuid.u,
+                .access_cb = on_scan,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC |
+                         BLE_GATT_CHR_F_READ_AUTHEN,
+            },
+            {
+                .uuid = &kProvUuid.u,
+                .access_cb = on_prov,
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC |
+                         BLE_GATT_CHR_F_WRITE_AUTHEN,
+            },
+            {
+                .uuid = &kLinkUuid.u,
+                .access_cb = on_link,
+                .val_handle = &s_link_handle,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY |
+                         BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_READ_AUTHEN,
+            },
+            {
+                .uuid = &kTokenUuid.u,
+                .access_cb = on_token,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC |
+                         BLE_GATT_CHR_F_READ_AUTHEN,
             },
             {
                 .uuid = &kStateUuid.u,
@@ -190,6 +333,8 @@ static int on_gap(struct ble_gap_event* ev, void* arg) {
       // without ever completing the exchange, and the panel was left showing a
       // code that would never be accepted and would never go away.
       s_passkey = 0;
+      s_peer_name[0] = '\0';
+      s_conn_token[0] = '\0';
       ESP_LOGI(TAG, "disconnected (%d)", ev->disconnect.reason);
       advertise();
       return 0;
