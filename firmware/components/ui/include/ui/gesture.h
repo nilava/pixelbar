@@ -24,16 +24,22 @@ namespace ui {
 // SOC_PCNT_SUPPORTED is defined for the S3 and absent here. On the device this
 // runs in a GPIO interrupt on both edges of both lines; on the host a test
 // drives it directly. Either way it is the same four-state table.
-// Gray-code table: index is (previous << 2) | current, value is the direction.
-// Zero is "no movement"; the two entries that would mean both lines changed in
-// one sample are marked 2 and counted rather than guessed at.
-inline constexpr int8_t kQuadTable[16] = {
-    //        now: 00  01  10  11
-    /* prev 00 */   0, -1, +1,  2,
-    /* prev 01 */  +1,  0,  2, -1,
-    /* prev 10 */  -1,  2,  0, +1,
-    /* prev 11 */   2, +1, -1,  0,
-};
+// Decoded arithmetically rather than through a lookup table.
+//
+// A table is the obvious way and it put sixteen bytes of rodata in flash,
+// which the device's encoder interrupt then read on every edge — and that
+// interrupt exists in IRAM specifically so it can run while the flash cache is
+// disabled. Code was not the only thing that had to leave flash; its data did
+// too, and a `constexpr` array is exactly as much a flash access as a function
+// call is.
+//
+// Two-bit Gray to binary is one xor: for g = (a << 1) | b, the position around
+// the cycle is g ^ (g >> 1), giving 00,01,11,10 -> 0,1,2,3. The difference
+// between consecutive positions, modulo four, is then the whole decode: 1 is a
+// step one way, 3 is a step the other, and 2 means both lines appeared to
+// change at once and the direction is unknowable. The subtraction is
+// prev - now rather than now - prev only to keep the direction the same as the
+// table it replaces, which the tests pin.
 
 class Quadrature {
  public:
@@ -45,7 +51,16 @@ class Quadrature {
   // milliseconds the cache is disabled during an NVS commit, and on an encoder
   // that shows up as detents silently going missing. The host tests exercise
   // this same source, so there is no second copy to drift.
-  int update(bool a, bool b) {
+  //
+  // always_inline, not merely `inline`. Being defined in a header is a
+  // permission and not an instruction: at -Os the compiler outlined this into
+  // its own .isra copy in flash, and the device's encoder interrupt — which is
+  // in IRAM precisely so it can run while the cache is disabled — then called
+  // out to it. During an NVS commit that costs detents; during a firmware
+  // update, where the cache is off for far longer, it is a Cache error panic
+  // and a dead upload. Verified with objdump rather than assumed, because the
+  // assumption is what failed.
+  __attribute__((always_inline)) inline int update(bool a, bool b) {
     const uint8_t now = static_cast<uint8_t>((a ? 2 : 0) | (b ? 1 : 0));
     if (!primed_) {
       primed_ = true;
@@ -53,7 +68,10 @@ class Quadrature {
       return 0;
     }
     if (now == state_) return 0;
-    const int8_t step = kQuadTable[(state_ << 2) | now];
+    const uint8_t was = static_cast<uint8_t>(state_ ^ (state_ >> 1));
+    const uint8_t is = static_cast<uint8_t>(now ^ (now >> 1));
+    const uint8_t d = static_cast<uint8_t>((was - is) & 3u);
+    const int8_t step = (d == 1) ? +1 : (d == 3) ? -1 : 2;
     state_ = now;
     if (step == 2) {
       // Both lines moved between samples, so the direction of that step is

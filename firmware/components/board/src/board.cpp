@@ -5,6 +5,7 @@
 #include <ctime>
 
 #include "driver/gpio.h"
+#include "hal/gpio_ll.h"
 #include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_err.h"
@@ -32,13 +33,26 @@ ui::Quadrature g_quad;
 volatile int32_t g_detents = 0;
 volatile uint32_t g_illegal = 0;
 
-// In IRAM, along with everything it touches. An interrupt living in flash
-// stalls for the milliseconds the cache is disabled during an NVS commit, and
-// on an encoder that is detents silently going missing. Quadrature::update is
-// header-inline for exactly this reason.
+// In IRAM, along with everything it touches — and that second clause has to be
+// true rather than merely intended.
+//
+// An interrupt living in flash stalls for the milliseconds the cache is
+// disabled during an NVS commit, and on an encoder that is detents silently
+// going missing. Worse than missing detents, though, is what happens during a
+// firmware update: the cache is off for far longer, and a flash access from an
+// interrupt there is not a stall but a Cache error panic. That is exactly how
+// the first over-the-air update died — the ISR was correctly marked IRAM_ATTR
+// and correctly registered with ESP_INTR_FLAG_IRAM, and then called
+// gpio_get_level(), which lives in flash. The comment above this function
+// already claimed otherwise and was wrong.
+//
+// gpio_ll_get_level is a static inline that compiles down to one register
+// read, so it lands inside this function rather than being a call out to
+// somewhere the cache may not be able to reach. Quadrature::update is
+// header-inline for the same reason.
 void IRAM_ATTR encoder_isr(void* /*arg*/) {
-  const bool a = gpio_get_level(pins::kEncoderA) != 0;
-  const bool b = gpio_get_level(pins::kEncoderB) != 0;
+  const bool a = gpio_ll_get_level(&GPIO, pins::kEncoderA) != 0;
+  const bool b = gpio_ll_get_level(&GPIO, pins::kEncoderB) != 0;
   g_quad.update(a, b);
   g_detents = g_quad.detents();
   g_illegal = g_quad.illegal();
