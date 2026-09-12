@@ -491,6 +491,28 @@ static void test_screens() {
     }
   }
 
+  CASE("every status stays inside the power budget across its whole breath");
+  {
+    // Each status now has its own depth and period, so the brightest moment is
+    // at a different point in each cycle — and a single-frame check would
+    // sample most of them somewhere harmless. A frame over the cap is scaled
+    // down, which would show up as a status visibly dimming at the top of its
+    // own pulse: the opposite of what the pulse is for.
+    for (int i = 0; i < static_cast<int>(Status::Count); ++i) {
+      UiState ui;
+      ui.status = static_cast<Status>(i);
+      float peak = 0.0f;
+      for (uint32_t ms = 0; ms <= 7000; ms += 50) {
+        Framebuffer fb;
+        draw_screen(fb, Screen::Status, ui, ms);
+        const float ma = fb.estimate_ma(255);
+        if (ma > peak) peak = ma;
+      }
+      CHECK(peak < kMaxMilliamps);
+      CHECK(peak > 0.0f);   // a status that draws nothing is not a status
+    }
+  }
+
   CASE("the pairing code fits, reads, and stays inside the power budget");
   {
     // Six tiny digits are exactly 23 of 24 columns — this screen fits once,

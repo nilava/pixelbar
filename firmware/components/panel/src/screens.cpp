@@ -419,11 +419,32 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       sa.tint.set_target(base);
       const RGB c = sa.tint.update(dt);
 
-      // Every status breathes; CALL also animates its icon and pulses harder,
-      // because it is the one that must interrupt you.
+      // Each status moves differently, not just differently coloured.
+      //
+      // Busy Bar gives every status its own background animation, and the idea
+      // is right even though none of their artwork is usable here: at a glance
+      // from across a room the *motion* is recognised before the word is read,
+      // and a device whose whole job is being glanceable should use that.
+      //
+      // Written here, not taken — theirs are 72x16 and CC-BY-SA, and ours is
+      // 24x8 and MIT.
+      //
+      // Restrained on purpose. These sit in somebody's peripheral vision for
+      // hours; anything with a fast edge becomes an irritation by the third
+      // hour, and the two that are *meant* to interrupt are the only two that
+      // move quickly.
+      float depth = 0.12f, period = 4.0f;
+      switch (ui.status) {
+        case Status::Call:  depth = 0.35f; period = 1.6f; break;  // insistent
+        case Status::Busy:  depth = 0.18f; period = 2.8f; break;
+        case Status::Dnd:   depth = 0.10f; period = 5.0f; break;  // flat, closed
+        case Status::Focus: depth = 0.16f; period = 6.0f; break;  // slow, deep
+        case Status::Away:  depth = 0.22f; period = 5.5f; break;  // drifting
+        case Status::Lunch: depth = 0.14f; period = 3.4f; break;
+        case Status::Meet:  depth = 0.20f; period = 2.2f; break;
+        default:            depth = 0.12f; period = 4.0f; break;  // FREE, calm
+      }
       const bool urgent = (ui.status == Status::Call);
-      const float depth = urgent ? 0.35f : 0.12f;
-      const float period = urgent ? 1.6f : 4.0f;
       const float k = (1.0f - depth) + depth * a.wave(period);
       const RGB lit = c.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
 
