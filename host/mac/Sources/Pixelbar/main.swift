@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var device: Device!
     private var observers: [NSKeyValueObservation] = []
     private var searching = false
+    private lazy var setupModel = SetupModel()
+    private lazy var setupWindow = SetupWindowController(model: setupModel)
 
     func applicationDidFinishLaunching(_ note: Notification) {
         // One at a time. `make install` leaves a copy in ~/Applications under a
@@ -150,9 +152,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(linkLine)
 
 
-        let again = NSMenuItem(title: "Set up again…", action: #selector(runSetup), keyEquivalent: "")
-        again.target = self
-        menu.addItem(again)
+        let status = NSMenuItem(title: "Panel status…", action: #selector(runSetup),
+                                keyEquivalent: "")
+        status.target = self
+        menu.addItem(status)
 
         let hostItem = NSMenuItem(title: "Panel: \(Prefs.host.isEmpty ? "—" : Prefs.host)",
                                   action: nil, keyEquivalent: "")
@@ -173,63 +176,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// and says why, rather than reporting a generic failure for two quite
     /// different problems.
     @objc private func runSetup() {
+        setupModel.summary = controller.setup.summary
+        setupModel.panelAddress = Prefs.host
+        setupModel.onStart = { [weak self] in Task { await self?.runBluetoothSetup() } }
+        setupModel.onReset = { [weak self] in self?.confirmReset() }
+        setupWindow.show()
+        // Started for you rather than waiting on a button: opening this window
+        // while nothing is configured is itself the request.
+        if controller.setup != .ready && setupModel.stage == .idle {
+            Task { await runBluetoothSetup() }
+        }
+    }
+
+    private func confirmReset() {
+        let a = NSAlert()
+        a.messageText = "Reset everything?"
+        a.informativeText =
+            "The panel forgets every paired client, every Bluetooth bond and its "
+            + "Wi-Fi network, and restarts into setup. This Mac forgets its token "
+            + "and the panel's address.\n\nYou will also need to forget the panel "
+            + "in System Settings → Bluetooth: macOS keeps its half of the pairing "
+            + "keys and will not offer the code again until it does."
+        a.alertStyle = .warning
+        a.addButton(withTitle: "Reset")
+        a.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard a.runModal() == .alertFirstButtonReturn else { return }
         Task {
-            await controller.refreshSetup()
-            if controller.isReady {
-                note("Already set up — the panel is at \(Prefs.host).")
-                return
-            }
-            await runBluetoothSetup()
+            setupModel.stage = .idle
+            setupModel.summary = "Resetting…"
+            await controller.factoryReset(includeDevice: true)
+            setupModel.summary = "Reset. The panel is restarting into setup."
+            setupModel.panelAddress = ""
+            setupModel.paired = []
             rebuildMenu()
         }
     }
 
-    /// Bluetooth first, because it needs nothing: no network, no address, no
-    /// discovery. One passkey authorises both transports — the panel hands the
-    /// API token across the link the passkey just secured. If Bluetooth cannot
-    /// be reached at all, fall back to finding the panel on the network.
     private func runBluetoothSetup() async {
+        setupModel.busy = true
+        defer { setupModel.busy = false }
+
+        // Mirror every stage into the window, so the half-minute this can take
+        // is legible instead of silent.
+        let mirror = Task { @MainActor in
+            while !Task.isCancelled {
+                setupModel.stage = controller.onboarding.step
+                setupModel.summary = controller.onboarding.step.summary
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+        defer { mirror.cancel() }
+
         let who = Host.current().localizedName ?? "Mac"
         let result = await controller.onboarding.run(name: who) { nets in
-            await self.askForNetwork(nets)
+            await self.chooseInWindow(nets)
         }
+
         if let r = result {
             await controller.adopt(token: r.token, ip: r.ip)
-            note("Set up. The panel is at \(r.ip), and this Mac is paired over "
-                 + "Bluetooth and holds a Wi-Fi token — from the one code you typed.")
+            setupModel.panelAddress = r.ip
+            setupModel.paired = ["Bluetooth", "Wi-Fi token"]
+            setupModel.stage = .done(ip: r.ip)
+            setupModel.summary = "Set up"
+            rebuildMenu()
             return
         }
+
         if case .failed(let why) = controller.onboarding.step {
-            note("Bluetooth setup did not finish: \(why).\n\nTrying over Wi-Fi.")
+            setupModel.summary = "Bluetooth setup did not finish"
+            // Offered rather than done silently: falling through to another
+            // transport without saying so is how somebody ends up not knowing
+            // which one they are on.
+            let a = NSAlert()
+            a.messageText = "Bluetooth setup did not finish"
+            a.informativeText = "\(why)\n\nTry over Wi-Fi instead?"
+            a.addButton(withTitle: "Try Wi-Fi")
+            a.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            if a.runModal() == .alertFirstButtonReturn { await runWifiSetup() }
         }
-        await runWifiSetup()
+        rebuildMenu()
     }
 
-    /// The panel stays connected over Bluetooth while this is up, so nothing
-    /// times out while somebody reads the list.
+    /// Hands the choice to the window and waits for its button.
     @MainActor
-    private func askForNetwork(_ nets: [Network]) async -> (ssid: String, pass: String)? {
-        let a = NSAlert()
-        a.messageText = "Which network?"
-        a.informativeText = "The panel can see these, and will join whichever you pick."
-        let box = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 58))
-        let pop = NSPopUpButton(frame: NSRect(x: 0, y: 30, width: 260, height: 25))
-        for n in nets {
-            let bars = n.rssi > -55 ? "●●●" : (n.rssi > -70 ? "●●○" : "●○○")
-            pop.addItem(withTitle: n.ssid + "  " + bars + (n.open ? "" : " 🔒"))
+    private func chooseInWindow(_ nets: [Network]) async -> (ssid: String, pass: String)? {
+        setupModel.networks = nets
+        return await withCheckedContinuation { cont in
+            var settled = false
+            setupModel.resume = { choice in
+                guard !settled else { return }
+                settled = true
+                cont.resume(returning: choice)
+            }
         }
-        let pass = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
-        pass.placeholderString = "Password (leave empty if open)"
-        box.addSubview(pop)
-        box.addSubview(pass)
-        a.accessoryView = box
-        a.addButton(withTitle: "Join")
-        a.addButton(withTitle: "Cancel")
-        NSApp.activate(ignoringOtherApps: true)
-        guard a.runModal() == .alertFirstButtonReturn,
-              pop.indexOfSelectedItem >= 0, pop.indexOfSelectedItem < nets.count
-        else { return nil }
-        return (nets[pop.indexOfSelectedItem].ssid, pass.stringValue)
     }
 
     private func runWifiSetup() async {

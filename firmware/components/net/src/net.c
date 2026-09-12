@@ -701,6 +701,27 @@ static esp_err_t delete_client(httpd_req_t* r) {
   return httpd_resp_sendstr(r, "{\"revoked\":true}");
 }
 
+// Back to factory, in one request.
+//
+// Three separate things have to go, and the point of doing them together is
+// that forgetting one and not the others leaves a device in a state nobody
+// designed: credentials with no clients that can use them, or bonds pointing
+// at tokens that no longer exist.
+static esp_err_t post_factory(httpd_req_t* r) {
+  if (!allowed(r)) return refuse(r);
+  ESP_LOGW(TAG, "factory reset requested");
+  auth_revoke_all();   // every API token
+  ble_forget_all();    // every Bluetooth bond
+  creds_clear();       // the network
+  httpd_resp_set_type(r, "application/json");
+  httpd_resp_sendstr(r, "{\"reset\":true,\"restarting\":true}");
+  // A clean boot is the one path back into setup that is certain to work, and
+  // this is a deliberate, rare act — the same reasoning as wifi/forget.
+  if (s_ap_down_timer) esp_timer_stop(s_ap_down_timer);
+  esp_restart();
+  return ESP_OK;
+}
+
 // The command vocabulary, independent of how it arrived.
 //
 // Extracted so that a write over Bluetooth and a POST over WiFi are the same
@@ -984,6 +1005,7 @@ static esp_err_t start_server(void) {
   const httpd_uri_t screen = {"/api/screen", HTTP_GET, get_screen, NULL};
   const httpd_uri_t pbegin = {"/api/pair/begin", HTTP_POST, post_pair_begin, NULL};
   const httpd_uri_t pair = {"/api/pair", HTTP_POST, post_pair, NULL};
+  const httpd_uri_t factory = {"/api/factory", HTTP_POST, post_factory, NULL};
   const httpd_uri_t clients = {"/api/clients", HTTP_GET, get_clients, NULL};
   const httpd_uri_t unclient = {"/api/clients", HTTP_DELETE, delete_client, NULL};
   const httpd_uri_t draw = {"/api/display/draw", HTTP_POST, post_draw, NULL};
@@ -999,6 +1021,7 @@ static esp_err_t start_server(void) {
   httpd_register_uri_handler(s_server, &screen);
   httpd_register_uri_handler(s_server, &pbegin);
   httpd_register_uri_handler(s_server, &pair);
+  httpd_register_uri_handler(s_server, &factory);
   httpd_register_uri_handler(s_server, &clients);
   httpd_register_uri_handler(s_server, &unclient);
   httpd_register_uri_handler(s_server, &draw);

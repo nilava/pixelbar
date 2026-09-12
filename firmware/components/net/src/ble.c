@@ -490,6 +490,22 @@ esp_err_t ble_start(const char* name) {
   return ESP_OK;
 }
 
+// Forget every bonded host.
+//
+// The bond store is the authority on who may drive this panel over Bluetooth,
+// so this is the Bluetooth half of a factory reset. Any host that was paired
+// will also need to forget the panel on its own side — macOS keeps its half of
+// the keys and will not re-run the passkey ceremony until it does.
+void ble_forget_all(void) {
+  const int rc = ble_store_clear();
+  ESP_LOGW(TAG, "forgot every bonded host (%d)", rc);
+  // Drop whoever is connected: their link is authenticated against a bond that
+  // no longer exists, and leaving it up would be leaving a door open that has
+  // had its lock removed.
+  if (s_conn != BLE_HS_CONN_HANDLE_NONE)
+    ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM);
+}
+
 void ble_publish(void) {
   if (s_conn == BLE_HS_CONN_HANDLE_NONE || s_state_handle == 0) return;
   char buf[440];

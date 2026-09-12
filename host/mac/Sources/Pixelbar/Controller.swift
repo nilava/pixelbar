@@ -366,6 +366,26 @@ final class Controller: ObservableObject {
         await evaluate()
     }
 
+    /// Forget everything, on both sides.
+    ///
+    /// The device first, because it is the half that needs a working link to
+    /// reach: clearing this Mac's token before telling the panel would leave
+    /// the panel still trusting a host that can no longer talk to it, and
+    /// nothing on the panel to clear it from except its own menu.
+    func factoryReset(includeDevice: Bool) async {
+        if includeDevice { _ = await device.post("/api/factory", [:]) }
+        Prefs.token = ""
+        Prefs.host = ""
+        Prefs.paused = false
+        Prefs.calEnabled = false
+        await device.setToken("")
+        await device.setHost("")
+        meeting = nil
+        pushed = nil
+        link = .none
+        await refreshSetup()
+    }
+
     func redeemWifiCode(_ code: Int) async -> Bool {
         guard let t = await device.redeem(code) else { return false }
         Prefs.token = t

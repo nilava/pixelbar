@@ -106,15 +106,32 @@ there is.
 
 ## Setting it up
 
-The menu shows **Set up Pixelbar…** and nothing else until it is paired. Not
-greyed-out options with no explanation — one obvious next step, and a first line
-that says which part is missing: no panel found, not paired, or paired but
-unreachable. Three different problems with three different remedies.
+**Open the window.** Setup is a window with every step on it, not a chain of
+dialogs — finding the panel, pairing, scanning, joining, collecting the token —
+with the current one named and the rest greyed. Each of those steps takes real
+time (a scan is two seconds, a join can be ten), and a process that goes quiet
+for half a minute reads as broken even when it is working perfectly. The network
+picker is part of the window rather than an alert on top of it, because choosing
+a network is a step of setup and not an interruption to it.
 
-Setup finds the panel, asks it to show a six-digit code, and takes that code in
-exchange for a token. Until that is done the helper sends nothing, so an
-unpaired helper is idle rather than silently failing every time a microphone
-opens.
+**One code, both transports.** The passkey secures the Bluetooth link, and the
+panel hands back a Wi-Fi token across that same link. There is no second
+ceremony — asking again on the second transport would be asking the same
+question twice and calling it security.
+
+**Reset everything** is in the same window. It tells the panel to forget every
+paired client, every Bluetooth bond and its network, and restarts it into setup;
+this Mac forgets its token and the panel's address. You must also forget the
+panel in **System Settings → Bluetooth**: macOS keeps its half of the pairing
+keys and will not offer the code again until it does.
+
+
+
+The menu shows one thing until it is paired, and a first line that says which
+part is missing: no panel found, not paired, or paired but unreachable. Three
+different problems with three different remedies, rather than greyed-out options
+with no explanation. Until setup is done the helper sends nothing, so an unpaired
+helper is idle rather than silently failing every time a microphone opens.
 
 ## Bluetooth pairing
 

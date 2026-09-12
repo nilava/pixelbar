@@ -25,6 +25,10 @@ uint32_t ble_passkey(void);
 // Cheap enough to call on a timer, not cheap enough to call every frame.
 void ble_publish(void);
 
+// Forgets every bonded host. The Bluetooth half of a factory reset; the paired
+// host must also forget the panel on its own side.
+void ble_forget_all(void);
+
 #ifdef __cplusplus
 }
 #endif
