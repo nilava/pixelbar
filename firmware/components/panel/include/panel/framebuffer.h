@@ -71,6 +71,15 @@ class Framebuffer {
   // so the caller can tell the user it is limiting.
   float render(uint8_t* out_grb, uint8_t brightness, float max_ma, const Wiring& w) const;
 
+  // The raw pixels, for callers that need to hand the whole frame somewhere
+  // else — the network mirror, and nothing else so far. Deliberately const:
+  // everything that *writes* goes through set(), which clips.
+  //
+  // The caller reinterprets this as bytes, which is only true while RGB has no
+  // padding. Three uint8_t members have none on every compiler this builds
+  // with, and an assertion is cheaper than finding out that one of them
+  // disagreed by looking at a panel full of noise.
+  static_assert(sizeof(RGB) == 3, "RGB must be three tightly packed bytes");
   const RGB* pixels() const { return px_; }
 
  private:

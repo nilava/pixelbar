@@ -138,6 +138,16 @@
 </div>
 
 <div class="card">
+  <h2>Mirror</h2>
+  <canvas id="mirror" width="24" height="8"
+          style="width:100%;image-rendering:pixelated;background:#000;
+                 border:1px solid var(--line);border-radius:8px;aspect-ratio:3"></canvas>
+  <p class="hint">What the panel is showing, about ten times a second. These are
+    the framebuffer's own colours, before gamma and the current cap — what the
+    screen <em>means</em>, rather than what the LEDs receive.</p>
+</div>
+
+<div class="card">
   <h2>Panel</h2>
   <dl>
     <dt>Clock</dt><dd id="clock">—</dd>
@@ -304,6 +314,33 @@ flash.onclick = () => {
   };
   x.send(file);
 };
+
+// -------------------------------------------------------------- the mirror
+const mirror = $("mirror"), mctx = mirror.getContext("2d");
+const mimg = mctx.createImageData(24, 8);
+let mirrorFails = 0;
+
+async function pollMirror() {
+  // Backs off rather than hammering: an older firmware has no /api/screen, and
+  // asking it ten times a second forever would be rude to a device whose main
+  // job is drawing.
+  if (mirrorFails > 5) return;
+  try {
+    const r = await (await fetch("/api/screen")).json();
+    const hex = r.rgb;
+    for (let i = 0; i < 24 * 8; i++) {
+      const o = i * 6;
+      mimg.data[i*4+0] = parseInt(hex.substr(o, 2), 16);
+      mimg.data[i*4+1] = parseInt(hex.substr(o+2, 2), 16);
+      mimg.data[i*4+2] = parseInt(hex.substr(o+4, 2), 16);
+      mimg.data[i*4+3] = 255;
+    }
+    mctx.putImageData(mimg, 0, 0);
+    mirrorFails = 0;
+  } catch { mirrorFails++; }
+}
+setInterval(pollMirror, 150);
+pollMirror();
 
 const mmss = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
 

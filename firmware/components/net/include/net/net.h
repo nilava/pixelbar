@@ -114,6 +114,13 @@ typedef struct {
 
 bool net_take_draw(net_draw_t* out);
 
+// A copy of what the panel is showing, as 192 RGB triples in row-major order.
+//
+// The point is to stop debugging this device by photographing it. Called from
+// the render loop; rate-limited inside, because a mirror nobody is watching
+// should cost nothing.
+void net_publish_frame(const uint8_t* rgb, int count);
+
 // Confirms the running image so the bootloader stops holding the previous one
 // in reserve. Call it only once the device has demonstrably survived: doing it
 // at startup would defeat the point of rollback entirely.

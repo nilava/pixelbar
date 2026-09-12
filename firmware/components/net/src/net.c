@@ -444,6 +444,50 @@ static bool str_field(const char* body, const char* key, char* out, size_t cap) 
   return true;
 }
 
+// A mirror of the panel.
+//
+// Kept as the framebuffer's own RGB rather than the GRB that goes down the
+// wire: the wire bytes have been through gamma and the power cap, so they are
+// what the LEDs receive and not what the screen means. For looking at a
+// layout, the latter is the useful one — and the former is already checked by
+// the preview tool and the map test.
+#define FRAME_BYTES (24 * 8 * 3)
+static uint8_t s_frame[FRAME_BYTES];
+static bool s_frame_valid = false;
+
+void net_publish_frame(const uint8_t* rgb, int count) {
+  if (!rgb || count * 3 != FRAME_BYTES) return;
+  // About ten times a second. A mirror is for looking at, and nobody looks
+  // faster than that; copying 576 bytes a hundred times a second to be read
+  // once would be work done for its own sake.
+  static int64_t last_us = 0;
+  const int64_t now = esp_timer_get_time();
+  if (now - last_us < 100000) return;
+  last_us = now;
+  memcpy(s_frame, rgb, FRAME_BYTES);
+  s_frame_valid = true;
+}
+
+static esp_err_t get_screen(httpd_req_t* r) {
+  if (!s_frame_valid) {
+    httpd_resp_set_status(r, "503 Service Unavailable");
+    return httpd_resp_sendstr(r, "{\"error\":\"no frame yet\"}");
+  }
+  // Hex rather than JSON numbers: 1152 characters against about 1700, and a
+  // fixed length the page can slice without parsing. Static because it is
+  // larger than this task's stack should carry and there is one worker.
+  static char hex[FRAME_BYTES * 2 + 64];
+  static const char kDigits[] = "0123456789abcdef";
+  int n = snprintf(hex, sizeof(hex), "{\"w\":24,\"h\":8,\"rgb\":\"");
+  for (int i = 0; i < FRAME_BYTES; ++i) {
+    hex[n++] = kDigits[s_frame[i] >> 4];
+    hex[n++] = kDigits[s_frame[i] & 0x0F];
+  }
+  n += snprintf(hex + n, sizeof(hex) - n, "\"}");
+  httpd_resp_set_type(r, "application/json");
+  return httpd_resp_send(r, hex, n);
+}
+
 // The latest draw request, and a serial so the render loop can tell a new one
 // from the same one still sitting here.
 //
@@ -711,7 +755,7 @@ static esp_err_t start_server(void) {
   httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
   cfg.max_open_sockets = 4;   // fewer sockets, less RAM; nothing needs more
   cfg.lru_purge_enable = true;  // a stuck client cannot lock the panel out
-  cfg.max_uri_handlers = 12;
+  cfg.max_uri_handlers = 16;
   // A scan builds its JSON on this stack, and so does the state handler.
   cfg.stack_size = 5120;
   // An image is about 875 KB and arrives in 4 KB pieces. The default five
@@ -730,6 +774,7 @@ static esp_err_t start_server(void) {
   const httpd_uri_t conn = {"/api/wifi/connect", HTTP_POST, post_wifi_connect, NULL};
   const httpd_uri_t forget = {"/api/wifi/forget", HTTP_POST, post_wifi_forget, NULL};
   const httpd_uri_t ota = {"/api/ota", HTTP_POST, ota_post, NULL};
+  const httpd_uri_t screen = {"/api/screen", HTTP_GET, get_screen, NULL};
   const httpd_uri_t draw = {"/api/display/draw", HTTP_POST, post_draw, NULL};
   const httpd_uri_t undraw = {"/api/display/draw", HTTP_DELETE, delete_draw, NULL};
   httpd_register_uri_handler(s_server, &root);
@@ -740,6 +785,7 @@ static esp_err_t start_server(void) {
   httpd_register_uri_handler(s_server, &conn);
   httpd_register_uri_handler(s_server, &forget);
   httpd_register_uri_handler(s_server, &ota);
+  httpd_register_uri_handler(s_server, &screen);
   httpd_register_uri_handler(s_server, &draw);
   httpd_register_uri_handler(s_server, &undraw);
   // The captive-portal half that DNS cannot do. Harmless in station mode: a

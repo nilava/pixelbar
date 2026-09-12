@@ -202,11 +202,22 @@ POST   /api/input            pads as levels, knob detents, status, brightness
 POST   /api/display/draw     show something; see below
 DELETE /api/display/draw     stop showing it
 POST   /api/ota              a firmware image; the panel restarts itself
+GET    /api/screen           what the panel is showing, as hex RGB
 GET    /api/wifi/scan        nearby networks
 GET    /api/wifi/status
 POST   /api/wifi/connect     {"ssid": "...", "pass": "..."}
 POST   /api/wifi/forget
 ```
+
+### Watching it from elsewhere
+
+`GET /api/screen` returns the framebuffer as 192 hex RGB triples, and the web
+page draws it into a canvas about ten times a second. This panel was debugged
+by photograph three times in one evening; that is what it is for.
+
+They are the framebuffer's own colours, before gamma and the current cap —
+what the screen *means* rather than what the LEDs receive. The wire bytes are
+already covered by the preview tool and the map test.
 
 ### Showing something
 

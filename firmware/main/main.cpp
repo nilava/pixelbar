@@ -264,6 +264,10 @@ extern "C" void app_main(void) {
       snprintf(ns.set_text, sizeof(ns.set_text), "%s",
                app.state().set_text ? app.state().set_text : "");
       net_publish(&ns);
+      // What the panel means, for anyone watching it from elsewhere. Rate
+      // limited inside; see net_publish_frame.
+      net_publish_frame(reinterpret_cast<const uint8_t*>(fb.pixels()),
+                        panel::kNumLeds);
     }
 
     vTaskDelayUntil(&last_wake, period);
