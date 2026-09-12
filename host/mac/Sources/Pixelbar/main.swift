@@ -88,6 +88,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cam.target = self
         cam.state = Prefs.camEnabled ? .on : .off
         menu.addItem(cam)
+
+        let cal = NSMenuItem(title: "Calendar sets MEET", action: #selector(toggleCal), keyEquivalent: "")
+        cal.target = self
+        cal.state = Prefs.calEnabled ? .on : .off
+        menu.addItem(cal)
+
+        if Prefs.calEnabled, let m = controller.meeting {
+            let mins = Int(m.startsIn / 60)
+            let line = m.isNow
+                ? "Now: \(m.title)"
+                : (mins <= 60 ? "In \(max(mins, 0)) min: \(m.title)" : "Next: \(m.title)")
+            let mi = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+            mi.isEnabled = false
+            menu.addItem(mi)
+        }
         menu.addItem(.separator())
 
         // Setting a status by hand is the thing you want when the automatic
@@ -133,6 +148,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func togglePause() { controller.paused.toggle(); rebuildMenu() }
     @objc private func toggleMic() { Prefs.micEnabled.toggle(); rebuildMenu() }
     @objc private func toggleCam() { Prefs.camEnabled.toggle(); rebuildMenu() }
+
+    @objc private func toggleCal() {
+        Task {
+            if Prefs.calEnabled {
+                await controller.disableCalendar()
+            } else if !(await controller.enableCalendar()) {
+                // A refusal is remembered by the system, so retrying in a loop
+                // achieves nothing; say where to change it instead.
+                note("macOS did not grant calendar access.\n\nSystem Settings → "
+                     + "Privacy & Security → Calendars, then switch this on again.")
+            }
+            rebuildMenu()
+        }
+    }
 
     @objc private func pick(_ sender: NSMenuItem) {
         guard let s = Status(rawValue: sender.tag) else { return }

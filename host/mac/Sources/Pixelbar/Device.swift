@@ -91,6 +91,23 @@ actor Device {
         await post("/api/input", ["status": s.rawValue])
     }
 
+    func draw(_ body: [String: Any]) async -> Bool {
+        await post("/api/display/draw", body)
+    }
+
+    @discardableResult
+    func clearDraw() async -> Bool {
+        guard let u = url("/api/display/draw") else { return false }
+        var req = URLRequest(url: u)
+        req.httpMethod = "DELETE"
+        do {
+            let (_, resp) = try await session.data(for: req)
+            return (resp as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
+        } catch {
+            return false
+        }
+    }
+
     func state() async -> DeviceState? {
         guard let u = url("/api/state") else { return nil }
         do {

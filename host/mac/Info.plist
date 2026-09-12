@@ -16,6 +16,12 @@
        responsible process, discovery silently finds nothing, and the only clue
        is that the identical binary works when run from a terminal, because
        there it inherits the terminal's permission. -->
+  <!-- macOS 14+ splits calendar access into full and write-only; the older
+       key is kept so this still runs on 13. -->
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Pixelbar shows your next meeting on the panel and sets your status while it runs.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Pixelbar shows your next meeting on the panel and sets your status while it runs.</string>
   <key>NSBluetoothAlwaysUsageDescription</key>
   <string>Pixelbar talks to your panel over Bluetooth when Wi-Fi is not available.</string>
   <key>NSLocalNetworkUsageDescription</key>

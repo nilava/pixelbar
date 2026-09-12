@@ -9,6 +9,7 @@ struct Prefs {
     static let micKey = "micEnabled"
     static let camKey = "camEnabled"
     static let pausedKey = "paused"
+    static let calKey = "calEnabled"
 
     static var host: String {
         get { UserDefaults.standard.string(forKey: hostKey) ?? "" }
@@ -21,6 +22,12 @@ struct Prefs {
     static var camEnabled: Bool {
         get { UserDefaults.standard.object(forKey: camKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: camKey) }
+    }
+    static var calEnabled: Bool {
+        // Off by default: reading somebody's calendar is a thing to opt into,
+        // not a thing to discover has been happening.
+        get { UserDefaults.standard.bool(forKey: calKey) }
+        set { UserDefaults.standard.set(newValue, forKey: calKey) }
     }
     static var paused: Bool {
         get { UserDefaults.standard.bool(forKey: pausedKey) }
@@ -40,9 +47,16 @@ final class Controller: ObservableObject {
     enum Link: String { case wifi = "Wi-Fi", bluetooth = "Bluetooth", none = "no link" }
     @Published private(set) var link: Link = .none
 
+    @Published private(set) var meeting: Meeting?
+    @Published private(set) var calendarAuthorised = false
+
     private let device: Device
     private let ble = BLETransport()
+    private let calendars = Calendars()
     private var mic: MicMonitor?
+    /// What was last put on the panel, so it is only re-sent when it changes.
+    /// A draw request every five seconds would restart the scroll each time.
+    private var shownMeetingStart: Date?
     private var releaseTask: Task<Void, Never>?
 
     /// What the panel was showing before we first overrode it.
@@ -75,9 +89,11 @@ final class Controller: ObservableObject {
         Task { await poll() }
     }
 
-    /// The camera has no change notification, and the link state has to be
-    /// discovered somehow, so one slow loop covers both.
+    /// The camera has no change notification, the link state has to be
+    /// discovered somehow, and the calendar has to be re-read: one slow loop
+    /// covers all three.
     private func poll() async {
+        var sinceCalendar = 999
         while !Task.isCancelled {
             let cam = CameraMonitor.anyRunning()
             if cam != camOn {
@@ -85,17 +101,92 @@ final class Controller: ObservableObject {
                 await evaluate()
             }
             reachable = await device.state() != nil
+
+            // Once a minute, not every five seconds. A calendar changes on the
+            // scale that meetings are moved, and the countdown on the panel is
+            // worked out there from a deadline rather than sent as a number —
+            // so re-reading faster would buy nothing.
+            sinceCalendar += 5
+            if Prefs.calEnabled && sinceCalendar >= 60 {
+                sinceCalendar = 0
+                await refreshCalendar()
+            }
             try? await Task.sleep(for: .seconds(5))
         }
     }
 
-    /// The status the sensors currently justify, or nil for "nothing to say".
+    func enableCalendar() async -> Bool {
+        let ok = await calendars.requestAccess()
+        calendarAuthorised = ok
+        if ok {
+            Prefs.calEnabled = true
+            await refreshCalendar()
+        }
+        return ok
+    }
+
+    func disableCalendar() async {
+        Prefs.calEnabled = false
+        meeting = nil
+        shownMeetingStart = nil
+        await device.clearDraw()
+        await evaluate()
+    }
+
+    private func refreshCalendar() async {
+        let next = await calendars.upcoming().first
+        meeting = next
+        await evaluate()
+
+        guard let m = next else {
+            if shownMeetingStart != nil {
+                shownMeetingStart = nil
+                await device.clearDraw()
+            }
+            return
+        }
+
+        // Announced only in the last ten minutes. Earlier than that it is not
+        // news, and a panel that shows the same meeting for an hour is a panel
+        // nobody looks at.
+        let soon = m.startsIn > 0 && m.startsIn <= 600
+        guard soon else {
+            if shownMeetingStart != nil {
+                shownMeetingStart = nil
+                await device.clearDraw()
+            }
+            return
+        }
+        // Only when it changes, or the scroll restarts every minute.
+        guard shownMeetingStart != m.start else { return }
+        shownMeetingStart = m.start
+
+        _ = await device.draw([
+            "source": "calendar",
+            "text": m.title.uppercased(),
+            "until": Int(m.start.timeIntervalSince1970),
+            "icon": m.isVideo ? "busy" : "timer",
+            // Urgent, but below a firmware update and below pairing — both of
+            // which are states the device is in rather than things a host
+            // asked for, and outrank every request by construction.
+            "priority": 90,
+            "ttl": 30,
+            "color": m.isVideo ? "#00AFB9" : "#FF8A1F",
+        ])
+    }
+
+    /// The status the evidence currently justifies, or nil for "nothing to say".
+    ///
+    /// Ordered by how directly each thing is observed. A live camera is
+    /// happening now; a calendar entry is somebody's earlier intention, and
+    /// people leave meetings early, join late, and decline by walking away.
+    /// So the sensors win, and the calendar fills the gap where there are no
+    /// sensors to go on.
     private var wanted: Status? {
         if paused { return nil }
-        // Camera beats microphone: a call with video is a call, and CALL is
-        // the more informative of the two to whoever is looking at the panel.
         if camOn && Prefs.camEnabled { return .call }
         if micOn && Prefs.micEnabled { return .busy }
+        if Prefs.calEnabled, let m = meeting, m.isNow { return .meet }
         return nil
     }
 

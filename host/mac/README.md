@@ -51,6 +51,42 @@ this device*, which is a different question from *what is that process
 recording*. A helper that had to request microphone access in order to notice
 the microphone was busy would be a worse trade than the feature is worth.
 
+## Your calendar
+
+**Off by default** — reading somebody's calendar is a thing to opt into, not a
+thing to discover has been happening. Switch on **Calendar sets MEET**.
+
+| When | What happens |
+| --- | --- |
+| A meeting starts in the next ten minutes | its title scrolls on the panel with a live countdown |
+| A meeting is running | the panel shows `MEET` |
+| Your microphone or camera is live | that wins — see below |
+
+It reads through **EventKit**, which means whatever accounts Calendar.app
+already has: iCloud, Google, Exchange, a subscribed ICS. No OAuth client, no
+consent screen, no client secret in a repo, no refresh token to expire at the
+worst possible moment. One permission prompt on first run, and it works offline
+against the local store. The cost is that an account not added to Calendar.app
+is invisible here — a fair trade for not implementing an identity provider
+inside a desk ornament.
+
+**The sensors outrank the calendar**, in this order: camera → `CALL`,
+microphone → `BUSY`, meeting in progress → `MEET`. That ordering is by how
+directly each thing is observed. A live camera is happening now; a calendar
+entry is somebody's earlier intention, and people leave early, join late, and
+decline by walking away.
+
+Declined invitations are skipped, all-day events are ignored, and a meeting is
+announced only in its last ten minutes — earlier than that it is not news, and
+a panel showing the same meeting for an hour is a panel nobody looks at. The
+announcement is sent once per meeting rather than on every poll, because
+re-sending would restart the scroll.
+
+An event counts as a video call if a known joining host appears in its URL,
+location or notes — Meet, Zoom, Teams, Webex, Whereby, Jitsi. Deliberately a
+short list rather than any URL: "there is a link in the notes" is true of most
+meetings and means nothing.
+
 ## Two ways to reach the panel
 
 **Wi-Fi first, Bluetooth second.** Not really a preference — an ordering by
