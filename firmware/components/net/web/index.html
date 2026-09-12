@@ -43,6 +43,16 @@
 <h1>Pixelbar</h1>
 <div class="sub" id="sub">connecting…</div>
 
+<div class="card">
+  <h2>Pairing</h2>
+  <div class="row">
+    <button id="pair">Pair this browser</button>
+  </div>
+  <p class="hint">Changing anything needs a token. Press this, read the six
+    digits off the panel, and type them in \u2014 the token is then kept in this
+    browser. Reading the panel's state never needs one.</p>
+</div>
+
 <div class="card" id="wifi">
   <h2>Wi-Fi</h2>
   <div id="wifi-state" class="hint" style="margin-top:0">checking…</div>
@@ -213,12 +223,12 @@ $("join").onsubmit = async e => {
   $("join").hidden = true;
   $("wifi-state").textContent = `Connecting to ${ssid}…`;
   await fetch("/api/wifi/connect",
-              {method: "POST", body: JSON.stringify({ssid, pass})}).catch(()=>{});
+              {method: "POST", headers: authHeaders(), body: JSON.stringify({ssid, pass})}).catch(()=>{});
 };
 
 $("forget").onclick = async () => {
   if (!confirm("Forget the stored network and restart into setup?")) return;
-  await fetch("/api/wifi/forget", {method: "POST"}).catch(()=>{});
+  await fetch("/api/wifi/forget", {method: "POST", headers: authHeaders()}).catch(()=>{});
   $("wifi-state").textContent = "Restarting into setup…";
 };
 
@@ -238,8 +248,39 @@ setInterval(pollWifi, 2000);
 
 const held = new Set();
 
-function send(body) {
-  fetch("/api/input", {method:"POST", body: JSON.stringify(body)}).catch(()=>{});
+// The token, kept per browser. Writes need it; reads do not.
+let token = localStorage.getItem("pixelbarToken") || "";
+
+function authHeaders() {
+  return token ? {"X-API-Token": token} : {};
+}
+
+async function send(body) {
+  const r = await fetch("/api/input", {
+    method: "POST", headers: authHeaders(), body: JSON.stringify(body)
+  }).catch(() => null);
+  // A 401 means this browser has never paired, or the panel was reset and
+  // issued a new token. Either way the answer is the same short ceremony.
+  if (r && r.status === 401) await pair();
+}
+
+async function pair() {
+  if (!confirm("This panel needs pairing.\n\nIt will show a six-digit code \u2014 "
+               + "read it off the panel and type it in next.")) return;
+  await fetch("/api/pair/begin", {method: "POST"}).catch(() => {});
+  const code = prompt("Six digits, from the panel:");
+  if (!code) return;
+  try {
+    const r = await fetch("/api/pair", {method: "POST", body: JSON.stringify({code: +code})});
+    const j = await r.json();
+    if (j.token) {
+      token = j.token;
+      localStorage.setItem("pixelbarToken", token);
+      alert("Paired. This browser will not need to ask again.");
+    } else {
+      alert("That code was wrong or had expired. Try again.");
+    }
+  } catch { alert("Could not reach the panel."); }
 }
 
 document.querySelectorAll("[data-zone]").forEach(b =>
@@ -259,6 +300,8 @@ document.querySelectorAll("[data-press]").forEach(b =>
   b.onclick = () => send({press: 1}));
 document.querySelectorAll("[data-presshold]").forEach(b =>
   b.onclick = () => send({presshold: 1}));
+
+$("pair").onclick = () => pair();
 
 const row = document.getElementById("statuses");
 STATUSES.forEach((name, i) => {
@@ -291,6 +334,7 @@ flash.onclick = () => {
   // still does not.
   const x = new XMLHttpRequest();
   x.open("POST", "/api/ota");
+  if (token) x.setRequestHeader("X-API-Token", token);
   x.upload.onprogress = e => {
     if (e.lengthComputable)
       fwState.textContent = `Uploading \u00b7 ${Math.round(e.loaded*100/e.total)}%`;

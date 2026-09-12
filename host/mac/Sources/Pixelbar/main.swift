@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        device = Device(host: Prefs.host)
+        device = Device(host: Prefs.host, token: Prefs.token)
         controller = Controller(device: device)
 
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -120,6 +120,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(setItem)
         menu.addItem(.separator())
 
+        let wifiPair = NSMenuItem(title: "Pair over Wi-Fi…", action: #selector(pairWifi),
+                                  keyEquivalent: "")
+        wifiPair.target = self
+        menu.addItem(wifiPair)
+
         let pairItem = NSMenuItem(title: controller.bluetoothReady
                                     ? "Pair over Bluetooth…" : "Bluetooth: no panel in range",
                                   action: #selector(pairBluetooth), keyEquivalent: "")
@@ -169,6 +174,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func findPanel() { Task { await autoFind(announce: true) } }
+
+    @objc private func pairWifi() {
+        Task {
+            guard await controller.beginWifiPairing() else {
+                note("Could not reach the panel over Wi-Fi.")
+                return
+            }
+            let a = NSAlert()
+            a.messageText = "Pair over Wi-Fi"
+            a.informativeText = "The panel is showing six digits. Type them here."
+            let f = NSTextField(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
+            f.placeholderString = "000000"
+            a.accessoryView = f
+            a.addButton(withTitle: "Pair")
+            a.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            guard a.runModal() == .alertFirstButtonReturn,
+                  let code = Int(f.stringValue.trimmingCharacters(in: .whitespaces))
+            else { return }
+            if await controller.redeemWifiCode(code) {
+                note("Paired. This Mac can drive the panel over Wi-Fi.")
+            } else {
+                note("That code was wrong or had expired. Try again.")
+            }
+            rebuildMenu()
+        }
+    }
 
     @objc private func pairBluetooth() {
         Task {

@@ -49,10 +49,16 @@ struct DeviceState {
 
 actor Device {
     private var host: String
+    private var token: String
     private let session: URLSession
 
-    init(host: String) {
+    /// True when the last write was refused for want of a token, so the menu
+    /// can offer pairing rather than silently doing nothing.
+    private(set) var needsPairing = false
+
+    init(host: String, token: String) {
         self.host = host
+        self.token = token
         let cfg = URLSessionConfiguration.ephemeral
         // Short, and deliberately so. This runs on a LAN; anything that takes
         // longer than two seconds is a device that is off, not a slow one, and
@@ -63,6 +69,7 @@ actor Device {
     }
 
     func setHost(_ h: String) { host = h }
+    func setToken(_ t: String) { token = t; needsPairing = false }
     func currentHost() -> String { host }
 
     private func url(_ path: String) -> URL? {
@@ -79,12 +86,34 @@ actor Device {
         var req = URLRequest(url: u)
         req.httpMethod = "POST"
         req.httpBody = data
+        if !token.isEmpty { req.setValue(token, forHTTPHeaderField: "X-API-Token") }
         do {
             let (_, resp) = try await session.data(for: req)
-            return (resp as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            // 401 is not a failure to reach the panel; it is a panel saying
+            // this Mac has never been introduced to it.
+            needsPairing = (code == 401)
+            return (200..<300).contains(code)
         } catch {
             return false
         }
+    }
+
+    /// Ask the panel to show a code.
+    func beginPairing() async -> Bool { await post("/api/pair/begin", [:]) }
+
+    /// Exchange the code for a token. Returns it, or nil.
+    func redeem(_ code: Int) async -> String? {
+        guard let u = url("/api/pair") else { return nil }
+        var req = URLRequest(url: u)
+        req.httpMethod = "POST"
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["code": code])
+        guard let (data, _) = try? await session.data(for: req),
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let t = j["token"] as? String else { return nil }
+        token = t
+        needsPairing = false
+        return t
     }
 
     func setStatus(_ s: Status) async -> Bool {

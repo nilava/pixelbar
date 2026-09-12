@@ -258,8 +258,39 @@ of a frame. A handler reaching into the model would be mutating state halfway
 through a frame already being drawn from it, and the failure would be a rare
 torn frame rather than anything a test would catch.
 
-**There is no authentication.** This is a gadget on a home LAN and the README
-should say so out loud rather than implying more than exists.
+### Pairing
+
+**Changing anything needs a token; reading never does.**
+
+Reads — `GET /api/state`, `GET /api/screen` — return what the panel is already
+showing to the room, and guarding them would be protecting a secret painted on
+the wall. Writes need `X-API-Token`, and that includes `POST /api/ota`, which
+is arbitrary code execution on the device.
+
+To get one, ask the panel and read it:
+
+```bash
+curl -X POST http://<panel>/api/pair/begin      # the panel shows six digits
+curl -X POST http://<panel>/api/pair -d '{"code":123456}'
+# {"token":"…32 hex characters…"}
+```
+
+The code is generated on the device, exists nowhere else, lives for sixty
+seconds, is spent on first use, and gives you three attempts. It is the same
+ceremony Bluetooth uses and deliberately so — one pairing gesture whichever
+transport is carrying it, rather than two unrelated ones. The token is kept in
+NVS and survives a reboot and an update.
+
+**Setup mode is exempt.** The device is then its own isolated network with one
+client slot and nothing else on it to reach, and a device nobody can provision
+is worse than one anybody already on it can poke.
+
+**This is a token over plain HTTP, not TLS**, and the README should keep saying
+so. A certificate store, a clock that must be right before anything works and a
+64 KB bundle would buy protection against an attacker already inside the
+network — who could unplug it instead. What a token stops is the casual and the
+accidental: a script pointed at the wrong address, a housemate who found the
+web page. That is the actual threat to a desk ornament.
 
 ## Transitions
 

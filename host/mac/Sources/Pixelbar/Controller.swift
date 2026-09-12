@@ -10,6 +10,7 @@ struct Prefs {
     static let camKey = "camEnabled"
     static let pausedKey = "paused"
     static let calKey = "calEnabled"
+    static let tokenKey = "apiToken"
 
     static var host: String {
         get { UserDefaults.standard.string(forKey: hostKey) ?? "" }
@@ -28,6 +29,10 @@ struct Prefs {
         // not a thing to discover has been happening.
         get { UserDefaults.standard.bool(forKey: calKey) }
         set { UserDefaults.standard.set(newValue, forKey: calKey) }
+    }
+    static var token: String {
+        get { UserDefaults.standard.string(forKey: tokenKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: tokenKey) }
     }
     static var paused: Bool {
         get { UserDefaults.standard.bool(forKey: pausedKey) }
@@ -273,6 +278,20 @@ final class Controller: ObservableObject {
     /// True if either pipe can reach the panel.
     var anyLink: Bool { reachable || ble.ready }
     var bluetoothReady: Bool { ble.ready }
+
+    /// Whether the panel has refused this Mac for want of a token.
+    func needsWifiPairing() async -> Bool { await device.needsPairing }
+
+    /// The same ceremony as Bluetooth, over WiFi: ask, read the code off the
+    /// panel, type it back, keep what comes out. One gesture whichever
+    /// transport is carrying it, rather than two unrelated ones.
+    func beginWifiPairing() async -> Bool { await device.beginPairing() }
+
+    func redeemWifiCode(_ code: Int) async -> Bool {
+        guard let t = await device.redeem(code) else { return false }
+        Prefs.token = t
+        return true
+    }
 
     /// Deliberately provoke Bluetooth pairing.
     ///

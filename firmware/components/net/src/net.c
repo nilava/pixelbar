@@ -17,6 +17,7 @@
 #include "esp_wifi.h"
 #include "captive_dns.h"
 #include "creds.h"
+#include "auth.h"
 #include "ble.h"
 #include "discovery.h"
 #include "ota.h"
@@ -444,6 +445,54 @@ static bool str_field(const char* body, const char* key, char* out, size_t cap) 
   return true;
 }
 
+// Is this request allowed to change anything?
+//
+// Reads stay open: /api/state and /api/screen return what the panel is already
+// showing to the room, and guarding them would be protecting a secret that is
+// painted on the wall. Writes need the token.
+//
+// Setup mode is the exception. The device is its own isolated network with one
+// client slot, there is nothing else on it to reach, and a device nobody can
+// provision is worse than one anybody on it can poke.
+static bool allowed(httpd_req_t* r) {
+  if (s_mode == NET_MODE_SETUP) return true;
+  char given[48];
+  if (httpd_req_get_hdr_value_str(r, "X-API-Token", given, sizeof(given)) != ESP_OK)
+    return false;
+  return auth_ok(given);
+}
+
+static esp_err_t refuse(httpd_req_t* r) {
+  httpd_resp_set_status(r, "401 Unauthorized");
+  httpd_resp_set_type(r, "application/json");
+  return httpd_resp_sendstr(
+      r, "{\"error\":\"needs X-API-Token; pair with the panel to get one\"}");
+}
+
+// The same gesture Bluetooth uses, over WiFi: ask, read the code off the
+// panel, type it back. One pairing ceremony rather than two unrelated ones.
+static esp_err_t post_pair_begin(httpd_req_t* r) {
+  auth_begin_pairing();
+  httpd_resp_set_type(r, "application/json");
+  return httpd_resp_sendstr(r, "{\"pairing\":true,\"seconds\":60}");
+}
+
+static esp_err_t post_pair(httpd_req_t* r) {
+  char body[96];
+  if (!body_of(r, body, sizeof(body))) return httpd_resp_send_500(r);
+  int code = 0;
+  const char* token = NULL;
+  if (!field(body, "\"code\"", &code) || !auth_redeem((uint32_t)code, &token)) {
+    httpd_resp_set_status(r, "403 Forbidden");
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, "{\"error\":\"wrong or expired code\"}");
+  }
+  char buf[96];
+  const int n = snprintf(buf, sizeof(buf), "{\"token\":\"%s\"}", token);
+  httpd_resp_set_type(r, "application/json");
+  return httpd_resp_send(r, buf, n);
+}
+
 // A mirror of the panel.
 //
 // Kept as the framebuffer's own RGB rather than the GRB that goes down the
@@ -526,6 +575,7 @@ static uint32_t parse_colour(const char* body, uint32_t fallback) {
 }
 
 static esp_err_t post_draw(httpd_req_t* r) {
+  if (!allowed(r)) return refuse(r);
   char body[320];
   if (!body_of(r, body, sizeof(body))) return httpd_resp_send_500(r);
 
@@ -562,6 +612,7 @@ static esp_err_t post_draw(httpd_req_t* r) {
 }
 
 static esp_err_t delete_draw(httpd_req_t* r) {
+  if (!allowed(r)) return refuse(r);
   // An empty payload with no ttl: the model drops it on the next frame.
   net_draw_t d = {0};
   d.priority = 100;   // outranks whatever is up, since the point is to clear it
@@ -594,6 +645,7 @@ int net_apply_input_json(const char* body) {
 }
 
 static esp_err_t post_input(httpd_req_t* r) {
+  if (!allowed(r)) return refuse(r);
   char body[192];
   if (!body_of(r, body, sizeof(body))) return httpd_resp_send_500(r);
   net_apply_input_json(body);
@@ -678,6 +730,7 @@ static esp_err_t get_wifi_scan(httpd_req_t* r) {
 }
 
 static esp_err_t post_wifi_connect(httpd_req_t* r) {
+  if (!allowed(r)) return refuse(r);
   char body[256];
   if (!body_of(r, body, sizeof(body))) return httpd_resp_send_500(r);
 
@@ -727,6 +780,7 @@ static esp_err_t get_wifi_status(httpd_req_t* r) {
 }
 
 static esp_err_t post_wifi_forget(httpd_req_t* r) {
+  if (!allowed(r)) return refuse(r);
   creds_clear();
   ESP_LOGW(TAG, "credentials cleared; restarting into setup");
   httpd_resp_set_type(r, "application/json");
@@ -775,6 +829,8 @@ static esp_err_t start_server(void) {
   const httpd_uri_t forget = {"/api/wifi/forget", HTTP_POST, post_wifi_forget, NULL};
   const httpd_uri_t ota = {"/api/ota", HTTP_POST, ota_post, NULL};
   const httpd_uri_t screen = {"/api/screen", HTTP_GET, get_screen, NULL};
+  const httpd_uri_t pbegin = {"/api/pair/begin", HTTP_POST, post_pair_begin, NULL};
+  const httpd_uri_t pair = {"/api/pair", HTTP_POST, post_pair, NULL};
   const httpd_uri_t draw = {"/api/display/draw", HTTP_POST, post_draw, NULL};
   const httpd_uri_t undraw = {"/api/display/draw", HTTP_DELETE, delete_draw, NULL};
   httpd_register_uri_handler(s_server, &root);
@@ -786,6 +842,8 @@ static esp_err_t start_server(void) {
   httpd_register_uri_handler(s_server, &forget);
   httpd_register_uri_handler(s_server, &ota);
   httpd_register_uri_handler(s_server, &screen);
+  httpd_register_uri_handler(s_server, &pbegin);
+  httpd_register_uri_handler(s_server, &pair);
   httpd_register_uri_handler(s_server, &draw);
   httpd_register_uri_handler(s_server, &undraw);
   // The captive-portal half that DNS cannot do. Harmless in station mode: a
@@ -825,6 +883,7 @@ static void scan_task(void* arg) {
 }
 
 esp_err_t net_start(void) {
+  auth_init();
   s_cmds = xQueueCreate(16, sizeof(net_cmd_t));
   if (!s_cmds) return ESP_ERR_NO_MEM;
   memset(&s_status, 0, sizeof(s_status));
@@ -964,7 +1023,13 @@ esp_err_t net_start(void) {
 }
 
 float net_ota_progress(void) { return ota_progress(); }
-uint32_t net_passkey(void) { return ble_passkey(); }
+uint32_t net_passkey(void) {
+  // Either ceremony puts a code on the same screen. They cannot both be open
+  // in practice, and if they were, showing the Bluetooth one first is right:
+  // that one is driven by a central already mid-handshake and cannot wait.
+  const uint32_t ble_code = ble_passkey();
+  return ble_code ? ble_code : auth_pairing_code();
+}
 void net_mark_healthy(void) { ota_mark_healthy(); }
 
 bool net_connected(void) { return s_connected; }
