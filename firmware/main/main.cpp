@@ -34,6 +34,10 @@ const char* TAG = "pixelbar";
 // Pattern::MapTest is still there for whenever the wiring is in doubt again.
 constexpr int64_t kMapTestSeconds = 0;
 
+// How long the render loop must survive before an over-the-air update is
+// confirmed and the previous image released. See the call site.
+constexpr int64_t kHealthySeconds = 10;
+
 panel::micros_t now_us() {
   return static_cast<panel::micros_t>(esp_timer_get_time());
 }
@@ -111,6 +115,22 @@ extern "C" void app_main(void) {
       ESP_LOGI(TAG, "mapping test done");
     }
 
+    // Tell the bootloader this image is worth keeping — but only after the
+    // render loop has actually run for a while.
+    //
+    // With rollback enabled a freshly flashed slot boots as *pending*, and any
+    // reset before this call puts the previous image back. Ten seconds of real
+    // frames is a weak proof of health and a sufficient one: it covers the
+    // failures that make a device unreachable, which are a crash or a panic
+    // loop in the first moments, and those are exactly the ones you cannot fix
+    // over the network. Confirming at startup instead would leave the flag set
+    // and the old image discarded before anything had been demonstrated.
+    static bool confirmed = false;
+    if (!confirmed && uptime_s >= kHealthySeconds) {
+      confirmed = true;
+      net_mark_healthy();
+    }
+
     if (mapping) {
       // Wiring check: a crisp single pixel, so dithering is off for it.
       engine.render_us(fb, t_us);
@@ -152,6 +172,7 @@ extern "C" void app_main(void) {
         // IDF header — so this is the one place they are mapped, and it is
         // three lines rather than a shared header that would couple them.
         const net_mode_t m = net_mode();
+        ports.set_ota(net_ota_progress());
         ports.set_net(m == NET_MODE_ONLINE  ? ui::Ports::NetMode::Online
                       : m == NET_MODE_JOINING ? ui::Ports::NetMode::Joining
                                               : ui::Ports::NetMode::Setup,

@@ -125,6 +125,17 @@ void App::update(float dt_s, double now_s) {
     ui_.wifi_connected = ports_->wifi_connected();
     ui_.net_text = ports_->net_text();
 
+    // An update takes the panel, from wherever you happen to be. It is not
+    // pushed onto the nav stack and there is no way out of it: the only exits
+    // are the reboot at the end and a failure, both of which end it from the
+    // other side.
+    ui_.ota = ports_->ota_progress();
+    if (ui_.ota >= 0.0f && screen() != panel::Screen::OtaProgress) {
+      show_net(panel::Screen::OtaProgress);
+    } else if (ui_.ota < 0.0f && screen() == panel::Screen::OtaProgress) {
+      go_home();  // the upload failed; put the device back where it was
+    }
+
     // A device with nothing stored cannot be set up from the panel — there is
     // no way to type a password into 24 pixels — so the only useful thing it
     // can do is say which network to join. It says so once, when setup mode

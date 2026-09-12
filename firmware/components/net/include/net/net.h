@@ -85,6 +85,15 @@ const char* net_setup_ssid(void);
 // join, the network being tried, or the address. Never null.
 const char* net_panel_text(void);
 
+// -1 when no update is in flight, otherwise 0..1. The panel shows a progress
+// screen whenever this is not negative.
+float net_ota_progress(void);
+
+// Confirms the running image so the bootloader stops holding the previous one
+// in reserve. Call it only once the device has demonstrably survived: doing it
+// at startup would defeat the point of rollback entirely.
+void net_mark_healthy(void);
+
 // True once there is an address. What the panel shows while there is not.
 bool net_connected(void);
 // Dotted quad, or an empty string. Valid once connected.

@@ -16,6 +16,7 @@
 #include "esp_wifi.h"
 #include "captive_dns.h"
 #include "creds.h"
+#include "ota.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -597,6 +598,12 @@ static esp_err_t start_server(void) {
   cfg.max_uri_handlers = 12;
   // A scan builds its JSON on this stack, and so does the state handler.
   cfg.stack_size = 5120;
+  // An image is about 875 KB and arrives in 4 KB pieces. The default five
+  // second receive timeout ends the upload part way through on a slow link,
+  // and a half-written slot is a wasted three minutes rather than a broken
+  // device — but it is still three minutes.
+  cfg.recv_wait_timeout = 20;
+  cfg.send_wait_timeout = 20;
   ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "httpd");
 
   const httpd_uri_t root = {"/", HTTP_GET, get_root, NULL};
@@ -606,6 +613,7 @@ static esp_err_t start_server(void) {
   const httpd_uri_t wstat = {"/api/wifi/status", HTTP_GET, get_wifi_status, NULL};
   const httpd_uri_t conn = {"/api/wifi/connect", HTTP_POST, post_wifi_connect, NULL};
   const httpd_uri_t forget = {"/api/wifi/forget", HTTP_POST, post_wifi_forget, NULL};
+  const httpd_uri_t ota = {"/api/ota", HTTP_POST, ota_post, NULL};
   httpd_register_uri_handler(s_server, &root);
   httpd_register_uri_handler(s_server, &state);
   httpd_register_uri_handler(s_server, &input);
@@ -613,6 +621,7 @@ static esp_err_t start_server(void) {
   httpd_register_uri_handler(s_server, &wstat);
   httpd_register_uri_handler(s_server, &conn);
   httpd_register_uri_handler(s_server, &forget);
+  httpd_register_uri_handler(s_server, &ota);
   // The captive-portal half that DNS cannot do. Harmless in station mode: a
   // wrong path on the home network redirects to a page that is not there,
   // which is no worse than the 404 it replaces.
@@ -770,6 +779,9 @@ esp_err_t net_start(void) {
   xTaskCreate(scan_task, "wifi_scan", 3072, NULL, 3, NULL);
   return ESP_OK;
 }
+
+float net_ota_progress(void) { return ota_progress(); }
+void net_mark_healthy(void) { ota_mark_healthy(); }
 
 bool net_connected(void) { return s_connected; }
 const char* net_ip(void) { return s_ip; }

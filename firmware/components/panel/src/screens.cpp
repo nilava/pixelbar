@@ -118,6 +118,7 @@ const char* screen_name(Screen s) {
     case Screen::WifiSetup: return "wifisetup";
     case Screen::WifiConnecting: return "wificonnecting";
     case Screen::WifiInfo: return "wifiinfo";
+    case Screen::OtaProgress: return "ota";
     default: return "?";
   }
 }
@@ -734,6 +735,29 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
         const float x = static_cast<float>(box) - a.phase(span / 9.0f) * span;
         mini_draw_text_aa(fb, 8.0f + x, 1, text, tint, 8, kWidth);
       }
+      break;
+    }
+
+    case Screen::OtaProgress: {
+      // The one screen that exists to be alarming. Pulling the power part way
+      // through a write is the only way to actually brick this device, so the
+      // panel says so in the loudest way eight rows allow: a full-width bar
+      // that fills, over a field that pulses.
+      const float p = ui.ota < 0.0f ? 0.0f : (ui.ota > 1.0f ? 1.0f : ui.ota);
+      const float k = 0.55f + 0.45f * a.wave(0.9f);
+      const RGB warm(255, 150, 30);
+      const RGB lit = warm.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
+
+      // Rows 0-2 carry the word, rows 4-7 the bar, so the two never collide
+      // the way the setting rail and its icon did.
+      mini_draw_text_centered(fb, 0, kWidth, 0, "UPDATE", RGB(150, 150, 150));
+      draw_bar_aa(fb, 4, 6, p, lit, warm.scaled(24));
+
+      // A row of ticks under the bar, so progress is readable even when the
+      // bar is nearly empty and the lit part is a single dim column.
+      const int lit_cols = static_cast<int>(p * kWidth + 0.5f);
+      for (int x = 0; x < kWidth; x += 4)
+        fb.set(x, 7, x < lit_cols ? lit : warm.scaled(20));
       break;
     }
 

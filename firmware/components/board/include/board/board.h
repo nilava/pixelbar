@@ -43,6 +43,9 @@ class DevicePorts : public ui::Ports {
 
   // Pushed in from main, for the same reason as the clock: this component
   // knows nothing about the radio.
+  float ota_progress() override { return ota_; }
+  void set_ota(float p) { ota_ = p; }
+
   void set_net(ui::Ports::NetMode m, const char* text) {
     net_mode_ = m;
     net_text_ = text ? text : "";
@@ -89,6 +92,7 @@ class DevicePorts : public ui::Ports {
   bool time_valid_ = false;
   ui::Ports::NetMode net_mode_ = ui::Ports::NetMode::Online;
   const char* net_text_ = "";
+  float ota_ = -1.0f;
   double uptime_s_ = 0.0;
 };
 

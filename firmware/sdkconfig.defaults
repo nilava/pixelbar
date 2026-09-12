@@ -15,3 +15,20 @@ CONFIG_FREERTOS_HZ=1000
 # Nothing in this project throws; leaving exceptions off keeps the binary small.
 CONFIG_COMPILER_CXX_EXCEPTIONS=n
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Over-the-air updates.
+#
+# The partition table has had two app slots from the start, so this costs no
+# repartitioning and therefore no wiping of stored settings.
+#
+# Rollback is the part that matters. With it enabled the bootloader marks a
+# freshly flashed slot as pending and will revert to the previous one unless
+# the running firmware says it is healthy — which main.cpp only does after the
+# render loop has survived for ten seconds. A build that crashes on boot
+# therefore undoes itself, which is the difference between an OTA you can use
+# on a device across the room and one you cannot.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# A firmware image is about 875 KB over a home LAN. The default 5 s recv
+# timeout ends the upload part way through on a slow link.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024

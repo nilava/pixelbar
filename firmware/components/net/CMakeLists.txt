@@ -5,11 +5,11 @@
 # except a status struct. If someone later includes a model header in here,
 # this line is what fails.
 idf_component_register(
-    SRCS "src/net.c" "src/creds.c" "src/captive_dns.c"
+    SRCS "src/net.c" "src/creds.c" "src/captive_dns.c" "src/ota.c"
     INCLUDE_DIRS "include"
     REQUIRES esp_wifi esp_netif esp_event esp_http_server esp_timer
     # lwip for the captive-portal DNS socket, nvs_flash for the credentials.
-    PRIV_REQUIRES nvs_flash lwip
+    PRIV_REQUIRES nvs_flash lwip app_update esp_app_format
 )
 
 # The page is gzipped at build time and linked into the image. There is no

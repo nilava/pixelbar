@@ -120,6 +120,24 @@
 </div>
 
 <div class="card">
+  <h2>Firmware</h2>
+  <input id="fw" type="file" accept=".bin"
+         style="width:100%;padding:10px;font:inherit;color:var(--dim);
+                background:#1e212b;border:1px solid var(--line);border-radius:9px">
+  <div class="row" style="margin-top:8px">
+    <button id="flash" disabled>Upload and restart</button>
+  </div>
+  <div id="fw-state" class="hint"></div>
+  <p class="hint">
+    Pick <code>firmware/build/pixelbar.bin</code>. The panel shows a bar while
+    it writes and restarts itself when it is done. Do not unplug it during the
+    write — that is the one thing that can actually brick the device.
+    If the new build fails to run for ten seconds the bootloader puts the old
+    one back on its own.
+  </p>
+</div>
+
+<div class="card">
   <h2>Panel</h2>
   <dl>
     <dt>Clock</dt><dd id="clock">—</dd>
@@ -244,6 +262,48 @@ const bright = document.getElementById("bright");
 let dragging = false;
 bright.oninput = () => { dragging = true; send({brightness: +bright.value}); };
 bright.onchange = () => { dragging = false; };
+
+// ---------------------------------------------------------------- firmware
+const fw = $("fw"), flash = $("flash"), fwState = $("fw-state");
+fw.onchange = () => {
+  flash.disabled = !fw.files.length;
+  if (fw.files.length)
+    fwState.textContent = `${fw.files[0].name} \u00b7 ${Math.round(fw.files[0].size/1024)} KB`;
+};
+
+flash.onclick = () => {
+  const file = fw.files[0];
+  if (!file) return;
+  if (!confirm("Upload " + file.name + " and restart the panel?")) return;
+  flash.disabled = true;
+
+  // XHR rather than fetch, only because it reports upload progress and fetch
+  // still does not.
+  const x = new XMLHttpRequest();
+  x.open("POST", "/api/ota");
+  x.upload.onprogress = e => {
+    if (e.lengthComputable)
+      fwState.textContent = `Uploading \u00b7 ${Math.round(e.loaded*100/e.total)}%`;
+  };
+  x.onload = () => {
+    if (x.status >= 200 && x.status < 300) {
+      fwState.textContent = "Written. Restarting\u2026";
+      // It comes back on the same address, so just wait and let the poller
+      // pick it up again.
+      setTimeout(() => { fwState.textContent = "Waiting for it to come back\u2026"; }, 2000);
+    } else {
+      let msg = x.responseText;
+      try { msg = JSON.parse(x.responseText).error || msg; } catch {}
+      fwState.textContent = "Failed: " + msg;
+      flash.disabled = false;
+    }
+  };
+  x.onerror = () => {
+    fwState.textContent = "Upload failed \u2014 the connection dropped.";
+    flash.disabled = false;
+  };
+  x.send(file);
+};
 
 const mmss = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
 

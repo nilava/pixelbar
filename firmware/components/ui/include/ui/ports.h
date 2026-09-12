@@ -39,6 +39,12 @@ struct Ports {
   // The setup SSID to join, or the address to visit, depending on the mode.
   // Must outlive the frame; on the device it is a static buffer in `net`.
   virtual const char* net_text() { return ""; }
+
+  // How far through a firmware update, 0..1, or negative when none is running.
+  // The panel takes this over everything else while it is not negative: an
+  // update is the one state where what the device is doing matters more than
+  // whatever you were looking at.
+  virtual float ota_progress() { return -1.0f; }
 };
 
 }  // namespace ui

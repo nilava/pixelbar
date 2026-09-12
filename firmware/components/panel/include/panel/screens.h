@@ -83,6 +83,7 @@ enum class Screen : uint8_t {
   WifiSetup,       // no credentials: join this network and open the page
   WifiConnecting,  // trying the credentials someone just typed
   WifiInfo,        // the address, so you can reach the page from your own network
+  OtaProgress,     // a firmware update is being written; do not unplug it
   Count,
 };
 
@@ -154,6 +155,9 @@ struct UiState {
 
   // Which ambient pattern the Scene screen draws.
   uint8_t scene = 0;
+
+  // How far through a firmware update, 0..1, or negative when none is running.
+  float ota = -1.0f;
   bool wifi_connected = false;
 };
 
