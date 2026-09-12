@@ -1,29 +1,35 @@
 # Pixelbar
 
 An 8×24 WS2812B desk panel driven by an ESP32-C3, built as an open alternative
-to a Busy Bar: it shows your status to the room, runs a focus timer, and takes
-input from three hidden touch zones and a rotary encoder.
+to a Busy Bar: it shows your status to the room, runs a focus timer, keeps the
+time, and takes input from a rotary encoder, three hidden touch zones, and a
+web page on your phone.
 
 The panel is three 65 mm 8×8 WS2812B boards butted edge to edge inside a
-snap-fit printed case, behind a per-LED light grid and a diffuser.
+snap-fit printed case, behind a per-LED light grid and a diffuser. It joins
+your network through a setup network of its own, so nothing is compiled in and
+no credential ever enters the source tree.
 
 ![status screens](docs/screens/status.png)
 
 ## Status
 
-**The display layer, the input model and the screen tree are done.** Icons, a
-mini font, transitions, flourishes and continuous motion at 100 fps; a gesture
-recogniser, a navigable menu and settings that persist. All of it unit tested
-on the host, drivable from a terminal, with the ESP32-C3 image building.
+**It works, on real hardware.** The panel runs at a measured 100 fps, joins
+WiFi through its own setup portal, keeps the right time over SNTP, serves a web
+page you can drive it from, and remembers everything you change across a power
+cut. The encoder is wired and the whole screen tree is navigable from it.
 
-The panel itself is wired and working — the LED mapping below was confirmed
-against it. None of *this* firmware has driven it yet, and the touch pads,
-encoder and accelerometer are not connected.
+| | |
+| --- | --- |
+| Display, input, screens, settings | done, on hardware |
+| WiFi, setup portal, SNTP, web page | done, on hardware |
+| LED output over SPI + GDMA | done — see *Why not RMT* below |
+| Touch pads | written and host-tested; the TTP223s are not soldered yet |
+| Accelerometer | not started; the MPU-6050 is not fitted |
+| OTA, Mac mic-detect helper, Slack and calendar | not started |
 
-Still to come, in order: the device input layer, moving the LED output from RMT
-to SPI+GDMA before any of the network work (see below), WiFi with a web page
-and OTA, then the Mac helper that flips the panel to BUSY when your microphone
-opens, and Slack and calendar after that.
+28,807 assertions run on a laptop with no hardware and no ESP-IDF. The image is
+at 49% of its 1.66 MB slot.
 
 ## Controls and screens
 
@@ -32,23 +38,33 @@ encoder knob is on the top edge at the right.
 
 | Input | Action |
 | --- | --- |
+| Knob, turn | The value on this screen, or the view cycle at rest |
+| Knob, press | Go in: open a menu entry, accept a value, claim a status |
+| Knob, hold | Come back out, one level at a time |
+| Knob, double-press | Straight back to the home view |
 | Left zone, tap | FREE ↔ BUSY |
 | Left zone, double-tap | CALL |
 | Left zone, hold | CALL |
 | Middle zone, tap | Start or pause the focus timer |
 | Middle zone, hold | Reset the timer to its set length |
-| Right zone, tap | Next view: status → clock → timer |
+| Right zone, tap | Next view |
 | Right zone, hold | DND on or off |
 | Left and right together | Sleep or wake |
 | Swipe across the zones | Next or previous view |
-| Knob, turn | The value on this screen, or the view at rest |
-| Knob, press | Confirm, or step to the next adjuster |
-| Knob, double-press | Back to the home view |
-| Knob, hold | Open the menu |
-| Knob, press and turn | Brightness, from anywhere |
-| Double-tap the case | FREE ↔ BUSY |
-| Shake | Back out |
-| Lay the panel flat | Sleep |
+
+The four home views the knob cycles are **status**, **clock**, **timer** and
+**scene**. The touch rows are written and tested but the pads are not soldered
+yet, so today they are reachable only from the web page, which drives them as
+pad *levels* rather than as events — the gesture recogniser sees exactly what a
+finger would produce.
+
+**Press goes in, hold comes out**, at every level. One rule the whole way down
+means there is always a way back that does not depend on remembering how deep
+you are. Turning the knob while pressing it used to adjust brightness from
+anywhere; that is gone, because on a KY-040 the push switch shares its ground
+with the rotary contacts, so an ordinary turn kept being read as the modifier
+and the panel fought itself. Two gestures competing for one movement is worse
+than one gesture and a menu.
 
 A tap never waits to find out whether it is going to become a double tap:
 holding it back for the 280 ms that would take puts the delay on the most-used
@@ -108,6 +124,90 @@ Everything moves. Icons breathe, CALL animates its handset and pulses harder
 because it is the one status that must interrupt you, the clock's second hand
 walks the panel's 60-pixel perimeter, timer digits roll, bars glide to their
 targets, and the colour picker has a specular band travelling its ramp.
+
+## Settings
+
+The menu is the settings tree, scrolled like a record. Seven groups, fourteen
+settings, and everything the device stores is reachable from the knob.
+
+| Group | Settings |
+| --- | --- |
+| **STAT** | jumps straight to the status picker — a shortcut, not a group |
+| **DISP** | brightness, accent hue, flip, sleep-after, current cap |
+| **TIME** | work minutes, rest minutes, sets, auto-continue |
+| **IDLE** | which ambient scene: solid, rainbow, plasma, sparkle |
+| **TILT** | motion gestures on/off, lay-flat-to-sleep |
+| **TAP** | touch lock |
+| **CLCK** | 12 or 24 hour |
+
+A setting is a row in a table rather than a screen of its own: what it is
+called, what it looks like, what kind of value it holds, and an id that one
+get/set pair switches on. One generic screen serves toggles, numbers and
+choices, because they differ by a few pixels and not by a layout — the value
+arrives already rendered as `ON`, `25M` or `PLASMA`, so the drawing layer never
+learns what any setting *means*.
+
+Everything is one versioned struct in a single NVS blob: one atomic write, and
+a migration is a version check instead of forty defaulted lookups. It is
+written once the knob stops moving rather than once per detent.
+
+## Network and setup
+
+Nothing is compiled in. With no credentials stored the device brings up an open
+`PIXELBAR-XXXX` network and a captive portal; join it and the setup page opens
+by itself.
+
+That last part is two pieces working together. A DNS responder answers every
+query with the device's own address, so the phone's connectivity check —
+`captive.apple.com`, `connectivitycheck.gstatic.com` — resolves to us; and a
+404 handler redirects, which is what the phone recognises as a portal rather
+than an internet. Sixty lines of socket code, because the only query worth
+parsing is one we have already decided the answer to.
+
+Credentials are stored **only once they have worked**. The device tries them
+over the station half of an APSTA mode while the portal is still up, so a typo
+is reported back to the page instead of being persisted and locking the device
+out of its own setup on the next boot. If a stored network then becomes
+unreachable for six attempts — you moved house, the password changed — the
+setup network comes back, because the web page needs a network and the panel
+cannot type a password.
+
+The panel says which of the three it is doing: the network to join, the network
+being tried, or the address to visit. All three are one layout — a signal mark
+and a marquee — separated by colour and by how fast the arcs climb.
+
+Time comes from SNTP once there is an address. Before the first sync the clock
+shows `--:--` rather than midnight: a clock that is confidently wrong is worse
+than one that admits it is waiting.
+
+## The web page
+
+One self-contained HTML file, gzipped at build time and linked into the image.
+It cannot live in a filesystem partition — the partition table already spends
+3.5 MB of a 4 MB part on two OTA slots.
+
+It emulates the touch pads and the knob, sets status and brightness directly,
+runs the WiFi setup, and shows what the panel is showing.
+
+```
+GET  /               the page
+GET  /api/state      screen, status, timer, brightness, fps, clock, encoder
+POST /api/input      pads as levels, knob detents, status, brightness
+GET  /api/wifi/scan  nearby networks
+GET  /api/wifi/status
+POST /api/wifi/connect   {"ssid": "...", "pass": "..."}
+POST /api/wifi/forget
+```
+
+Nothing here touches the model. An HTTP handler runs on the server's task and
+the model runs on the render loop; the only thing that crosses between them is
+a twelve-byte command through a FreeRTOS queue that the loop drains at the top
+of a frame. A handler reaching into the model would be mutating state halfway
+through a frame already being drawn from it, and the failure would be a rare
+torn frame rather than anything a test would catch.
+
+**There is no authentication.** This is a gadget on a home LAN and the README
+should say so out loud rather than implying more than exists.
 
 ## Transitions
 
@@ -215,6 +315,22 @@ idf.py build
 idf.py -p /dev/cu.usbmodem* flash monitor
 ```
 
+There is no configuration step and no credentials file to create. On first boot
+the panel shows a network name — join it from your phone, pick your WiFi, and
+the setup page closes itself when the panel shows you its address.
+
+> **Why there is no `secrets.h`.** There used to be, and it was quietly
+> leaking. A password written into a header does not stay in the header: it
+> ends up in the object file, the static library, the `.elf` and the `.bin`, so
+> an ordinary build tree becomes five more copies of a secret nobody thinks of
+> as holding one. No firmware source has ever seen a credential now, which is
+> the only way to be certain no build artifact has either.
+
+If the USB Serial/JTAG port stops enumerating mid-session — it happens on these
+boards — unplug and replug the cable. Note that driving DTR/RTS on an ESP32-C3
+selects download mode, so a naive serial reader can park the board at *waiting
+for download*; read the port without touching those lines.
+
 ## The LED mapping
 
 How the LEDs are wired *inside* one 8×8 board varies between suppliers, so it
@@ -245,7 +361,13 @@ is guaranteed to address all 192 LEDs exactly once.
 
 ## Tests and preview, no hardware needed
 
-The whole drawing layer is free of ESP-IDF, so it builds and runs on a laptop.
+The whole drawing layer **and** the input and state layer are free of ESP-IDF,
+so they build and run on a laptop with a plain C++17 compiler. That portability
+is load-bearing rather than incidental: the gesture recogniser and the state
+machine are the two things most worth testing and the two things least
+pleasant to test on hardware, so they sit behind an interface (`ui::Ports`)
+that the device implements with GPIO and NVS and the simulator implements in
+memory. 28,807 assertions run in a few seconds.
 
 ```bash
 ./test/run.sh                                    # builds and runs the tests
@@ -315,6 +437,14 @@ test/                        host-side tests
 tools/                       PNG preview renderer
 hardware/                    enclosure model, STLs, wiring
 ```
+
+## Documentation
+
+| | |
+| --- | --- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | how the firmware is arranged and why — the C3's missing peripherals, the SPI output path, dithering, the disk geometry, the navigation contracts |
+| [hardware/WIRING.md](hardware/WIRING.md) | the GPIO map, the encoder's pull-ups, power, the panel chain |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | the constraints the build enforces |
 
 ## License
 

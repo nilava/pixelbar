@@ -1,0 +1,32 @@
+# The host tests, which need neither ESP-IDF nor hardware.
+#
+# That is the whole point of keeping the panel and ui components free of
+# ESP-IDF: the two layers most worth testing — the drawing and the state
+# machine — build with a plain C++17 compiler, so CI is a compiler and a
+# script rather than a toolchain install and an emulator.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run the host tests
+        run: ./test/run.sh
+
+      # The simulator builds from the same sources. Building it here stops a
+      # change that only compiles under ESP-IDF from landing unnoticed.
+      - name: Build the simulator
+        run: |
+          g++ -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter \
+            -Ifirmware/components/panel/include \
+            -Ifirmware/components/ui/include \
+            firmware/components/panel/src/*.cpp \
+            firmware/components/ui/src/*.cpp \
+            tools/sim.cpp -o /tmp/sim
