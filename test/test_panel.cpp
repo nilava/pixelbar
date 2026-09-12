@@ -491,6 +491,45 @@ static void test_screens() {
     }
   }
 
+  CASE("the setup screen offers Bluetooth as well as the access point");
+  {
+    // An unprovisioned panel has two ways in and used to name one. The mark
+    // alternates, so the test is that the two halves of the cycle actually
+    // draw different things — and specifically that the Bluetooth half is not
+    // the Wi-Fi arcs in another colour.
+    //
+    // Column 0 is the tell. The arcs are quarter-circles about the bottom-left
+    // corner, so each one puts a pixel at x=0; the rune sits at x=1..5 and
+    // never touches it.
+    UiState ui;
+    ui.net_text = "PIXELBAR-F8A4";
+
+    auto column0_lit = [](const Framebuffer& fb) {
+      for (int y = 0; y < kHeight; ++y) {
+        const RGB c = fb.get(0, y);
+        if (c.r || c.g || c.b) return true;
+      }
+      return false;
+    };
+
+    // The cycle is six seconds, Bluetooth for the first half.
+    Framebuffer bt;
+    draw_screen(bt, Screen::WifiSetup, ui, 1000);
+    CHECK(!column0_lit(bt));
+
+    Framebuffer wifi;
+    draw_screen(wifi, Screen::WifiSetup, ui, 4000);
+    CHECK(column0_lit(wifi));
+
+    // And the screens that are *not* setup keep the arcs throughout: a panel
+    // that is joining or already online has nothing to say about pairing.
+    for (uint32_t now = 0; now < 6000; now += 500) {
+      Framebuffer f;
+      draw_screen(f, Screen::WifiConnecting, ui, now);
+      CHECK(column0_lit(f));
+    }
+  }
+
   CASE("every status stays inside the power budget across its whole breath");
   {
     // Each status now has its own depth and period, so the brightest moment is

@@ -28,6 +28,7 @@ final class Onboarding: ObservableObject {
         case scanning
         case chooseNetwork([Network])
         case joining(String)
+        case rejected(String)           // that network said no; pick again
         case collecting                 // the address and the token
         case done(ip: String)
         case failed(String)
@@ -40,6 +41,7 @@ final class Onboarding: ObservableObject {
             case .scanning: return "Asking the panel what it can see…"
             case .chooseNetwork: return "Choose a network"
             case .joining(let s): return "Joining \(s)…"
+            case .rejected(let why): return "\(why) — try again"
             case .collecting: return "Collecting the address and a token…"
             case .done(let ip): return "Set up — the panel is at \(ip)"
             case .failed(let why): return "Setup failed: \(why)"
@@ -182,35 +184,48 @@ final class Onboarding: ObservableObject {
             step = .failed("the panel could not see any networks")
             return nil
         }
-        step = .chooseNetwork(networks.sorted { $0.rssi > $1.rssi })
-        guard let choice = await pick(networks.sorted { $0.rssi > $1.rssi }) else {
-            step = .idle
-            return nil
-        }
-
-        step = .joining(choice.ssid)
-        ble.write(BLEIDs.provision,
-                  ["ssid": choice.ssid, "pass": choice.pass, "name": name])
-
-        // Wait for an address. The panel reports its own progress, so there is
-        // nothing to discover and nothing to poll over a network that may not
-        // have accepted us yet.
+        // Choose, join, and if the join is refused, choose again.
+        //
+        // A mistyped password used to end setup. The panel handles it properly
+        // — a join it was asked for is not retried, the credentials are not
+        // stored until one succeeds, and the access point stays up — so the
+        // device was always ready for another go and only this flow was not.
+        // Starting over from "find the panel" to retype one field is not a
+        // retry, it is a punishment.
         var ip = ""
-        for _ in 0..<30 {
-            try? await Task.sleep(for: .seconds(1))
-            guard let j = await read(BLEIDs.link, timeout: 3) else { continue }
-            if let e = j["error"] as? String, !e.isEmpty {
-                step = .failed(e)
+        let ordered = networks.sorted { $0.rssi > $1.rssi }
+        while ip.isEmpty {
+            step = .chooseNetwork(ordered)
+            guard let choice = await pick(ordered) else {
+                step = .idle
                 return nil
             }
-            if let got = j["ip"] as? String, !got.isEmpty, got != "0.0.0.0" {
-                ip = got
-                break
+
+            step = .joining(choice.ssid)
+            ble.write(BLEIDs.provision,
+                      ["ssid": choice.ssid, "pass": choice.pass, "name": name])
+
+            // Wait for an address. The panel reports its own progress, so there
+            // is nothing to discover and nothing to poll over a network that
+            // may not have accepted us yet.
+            var refused = ""
+            for _ in 0..<30 {
+                try? await Task.sleep(for: .seconds(1))
+                guard let j = await read(BLEIDs.link, timeout: 3) else { continue }
+                if let e = j["error"] as? String, !e.isEmpty {
+                    refused = e
+                    break
+                }
+                if let got = j["ip"] as? String, !got.isEmpty, got != "0.0.0.0" {
+                    ip = got
+                    break
+                }
             }
-        }
-        guard !ip.isEmpty else {
-            step = .failed("joined nothing in time")
-            return nil
+            if !ip.isEmpty { break }
+            step = .rejected(refused.isEmpty ? "the panel could not join" : refused)
+            // A beat on the failure before the list comes back, so the reason
+            // is readable rather than a flicker between two pickers.
+            try? await Task.sleep(for: .seconds(2))
         }
 
         // Retried, and for a reason rather than out of superstition: this is

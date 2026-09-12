@@ -94,6 +94,9 @@ struct SetupView: View {
     private func state(for index: Int) -> StepRow.State {
         let now = order(model.stage)
         if case .failed = model.stage { return index == now ? .failed : (index < now ? .done : .waiting) }
+        // A refusal marks the join row red while the picker comes back, rather
+        // than leaving it spinning on an attempt that is already over.
+        if case .rejected = model.stage { return index == now ? .failed : (index < now ? .done : .waiting) }
         if index < now { return .done }
         if index == now { return .active }
         return .waiting
@@ -109,6 +112,9 @@ struct SetupView: View {
         case .scanning: return 2
         case .chooseNetwork: return 2
         case .joining: return 3
+        // The network refused us. It is the join that failed, so that is the
+        // row that should be showing it while the picker comes back.
+        case .rejected: return 3
         case .collecting: return 4
         case .done: return 4
         case .failed: return 4

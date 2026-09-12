@@ -787,6 +787,35 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       const bool trying = (s == Screen::WifiConnecting);
       const RGB tint = (setup || trying) ? RGB(255, 150, 30) : ui.accent;
 
+      // An unprovisioned panel has two ways in, and used to show one.
+      //
+      // Bluetooth is the way this is meant to be done — it is what the helper
+      // drives, and it needs no network at all — while the access point is the
+      // fallback for a host that cannot reach it that way. Showing only the AP
+      // name meant the panel was advertising its fallback as though it were
+      // the method, and nothing on the device ever mentioned Bluetooth.
+      //
+      // So the mark alternates. The name is the same either way, which is what
+      // makes one line of text serve both: pair with it, or join it.
+      const bool bt_turn = setup && a.phase(6.0f) < 0.5f;
+      if (bt_turn) {
+        // The rune, five wide, because it has to be recognisable at eight
+        // pixels tall and the arcs it replaces are not.
+        static const uint8_t kBt[8] = {0x04, 0x06, 0x15, 0x0E,
+                                       0x0E, 0x15, 0x06, 0x04};
+        const float k = 0.55f + 0.45f * a.wave(0.8f);
+        const RGB c = RGB(60, 140, 255)
+                          .scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
+        for (int y = 0; y < 8; ++y) {
+          for (int x = 0; x < 5; ++x) {
+            if (kBt[y] & (1 << (4 - x))) fb.set(x + 1, y, c);
+          }
+        }
+        const char* nm = ui.net_text && ui.net_text[0] ? ui.net_text : "...";
+        draw_marquee(fb, a, nm, 8, kWidth - 8, 1, c);
+        break;
+      }
+
       // The arcs climb and reset, which is the most direct way a three-bar
       // signal mark can say "not yet". Faster while a join is actually in
       // flight than while waiting to be told what to join: the difference in
