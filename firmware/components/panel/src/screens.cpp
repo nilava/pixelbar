@@ -270,13 +270,6 @@ bool status_uses_badge(Status s) { return !mini_text_fits(status_label(s)); }
 // The icons for apps, motion, touch and network are drawn and waiting in
 // icons.h. They arrive with the features behind them: a row that does nothing
 // when you press it teaches you that pressing does not work.
-const MenuEntry kMenu[] = {
-    {&kIconBusy, "STAT", RGB(255, 30, 15), false},
-    {&kIconHourglass, "TIME", RGB(255, 138, 31), false},
-    {&kIconSunCore, "DIM", RGB(255, 200, 60), false},
-    {&kIconPalette, "HUE", RGB(140, 60, 255), false},
-};
-const int kMenuCount = static_cast<int>(sizeof(kMenu) / sizeof(kMenu[0]));
 
 void draw_badge(Framebuffer& fb, int x0, int y0, int w, int h, RGB fill) {
   if (w <= 0 || h <= 0) return;
@@ -477,9 +470,9 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       // Two levels of the same list. What differs is only what is in it, which
       // the model supplies, so both draw through one function rather than
       // drifting apart as one of them is tweaked.
-      const MenuEntry* items = ui.list ? ui.list : kMenu;
-      const int n = ui.list ? ui.list_count : kMenuCount;
-      if (n <= 0) break;
+      const MenuEntry* items = ui.list;
+      const int n = ui.list_count;
+      if (!items || n <= 0) break;
       int idx = ui.menu_index;
       if (idx < 0 || idx >= n) idx = 0;
       draw_list_row(fb, items[idx], idx, n, a);
@@ -501,8 +494,13 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
         // A toggle that is off is drawn dim rather than absent: the icon is
         // what tells you which setting you are looking at, and hiding it to
         // show a state would cost the identity to show the value.
+        // An off toggle is dimmed, not hidden: the icon is what tells you which
+        // setting you are looking at, and the word beside it already says the
+        // value. 45 was too far — after gamma it rendered as black, so the
+        // screen read as a missing icon rather than an inactive one.
         draw_icon(fb, kIconX, 0, *ui.set_icon,
-                  ui.set_on || ui.set_fraction >= 0.0f ? lit : ui.set_tint.scaled(45));
+                  ui.set_on || ui.set_fraction >= 0.0f ? lit
+                                                       : ui.set_tint.scaled(110));
       }
 
       // The value fills the label box. Long choices scroll rather than clip,
@@ -522,8 +520,22 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
 
       // The rail, for anything with a range. A toggle has nowhere to be along
       // a line, so it does not get one.
+      //
+      // Confined to the label area rather than the full width. An icon is
+      // eight rows tall and so reaches row 7 itself, and a full-width rail ran
+      // straight through the bottom of it — the two were drawn over each other
+      // and the rail's lit end was the part that disappeared. The menu's
+      // position ticks have always started at kLabelX for the same reason.
       if (ui.set_fraction >= 0.0f) {
-        draw_bar(fb, 7, 7, ui.set_fraction, lit, ui.set_tint.scaled(28));
+        const int x0 = kLabelX;
+        const int span = kWidth - x0;
+        const float edge = ui.set_fraction * static_cast<float>(span);
+        for (int i = 0; i < span; ++i) {
+          float cov = edge - static_cast<float>(i);
+          if (cov < 0.0f) cov = 0.0f;
+          if (cov > 1.0f) cov = 1.0f;
+          fb.set(x0 + i, 7, cov > 0.5f ? lit : ui.set_tint.scaled(28));
+        }
       }
       break;
     }

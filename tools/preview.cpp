@@ -16,11 +16,22 @@
 #include "panel/flourish.h"
 #include "panel/framebuffer.h"
 #include "panel/patterns.h"
+#include "ui/settings_tree.h"
 #include "panel/renderer.h"
 #include "panel/screens.h"
 #include "panel/transition.h"
 
 using namespace panel;
+
+// The rows the Menu screen draws, taken from the real settings tree so a
+// rendered clip cannot show a menu the device does not have. `::ui::` because
+// the local UiState variables here are called `ui` and shadow the namespace.
+static std::vector<MenuEntry> group_rows() {
+  std::vector<MenuEntry> rows;
+  for (int i = 0; i < ::ui::kGroupCount; ++i) rows.push_back(::ui::kGroups[i].row);
+  return rows;
+}
+
 
 namespace {
 
@@ -135,6 +146,7 @@ void render_sheet(Pattern pat, const std::string& dir) {
   engine.params.minute = 25;
   engine.params.second = 37;
 
+
   Framebuffer fb;
   uint8_t grb[kNumLeds * 3];
   uint32_t t = 0;
@@ -209,6 +221,52 @@ void vary_state(Screen s, int frame, UiState& ui) {
     case Screen::Booting:
       ui.wifi_connected = (frame == 3);
       break;
+    case Screen::Menu:
+      ui.menu_index = static_cast<uint8_t>(frame % ::ui::kGroupCount);
+      break;
+    case Screen::Group: {
+      // The display group, which has enough settings in it to scroll.
+      const ::ui::SettingGroup& g = ::ui::kGroups[1];
+      static std::vector<MenuEntry> items;
+      items.clear();
+      for (int i = 0; i < g.count; ++i) items.push_back(g.items[i].row);
+      ui.list = items.data();
+      ui.list_count = static_cast<int>(items.size());
+      ui.menu_index = static_cast<uint8_t>(frame % g.count);
+      break;
+    }
+    case Screen::Setting: {
+      // A real setting, rendered the way the model renders it: the value
+      // arrives as text, so a still of this screen has to be built the same
+      // way or it is a picture of an empty box.
+      static const struct { const char* label; const char* text; float frac; }
+          kShown[] = {{"FLIP", "OFF", -1.0f},
+                      {"REST", "30M", 0.25f},
+                      {"PICK", "PLASMA", -1.0f},
+                      {"SETS", "4", 0.27f}};
+      const auto& k = kShown[frame % 4];
+      ui.set_icon = &kIconGear;
+      ui.set_label = k.label;
+      ui.set_text = k.text;
+      ui.set_tint = RGB(255, 200, 60);
+      ui.set_fraction = k.frac;
+      ui.set_on = k.text[1] == 'N';
+      break;
+    }
+    case Screen::Scene:
+      ui.scene = static_cast<uint8_t>(frame % scene_count());
+      break;
+    case Screen::WifiSetup:
+      ui.net_text = "PIXELBAR-A3F2";
+      break;
+    case Screen::WifiConnecting:
+      // A made-up name on purpose: these images ship in a public repo and
+      // there is no reason for them to name anybody's actual network.
+      ui.net_text = "HOME-WIFI";
+      break;
+    case Screen::WifiInfo:
+      ui.net_text = "192.168.1.42";
+      break;
     default:
       break;
   }
@@ -223,6 +281,9 @@ void render_screen_sheet(Screen s, const std::string& dir) {
   uint8_t grb[kNumLeds * 3];
   for (int frame = 0; frame < kFramesPerSheet; ++frame) {
     UiState ui;
+    static const std::vector<MenuEntry> rows = group_rows();
+    ui.list = rows.data();
+    ui.list_count = static_cast<int>(rows.size());
     ui.accent = RGB(255, 138, 31);
     ui.hour = 14;
     ui.minute = 25;
@@ -303,6 +364,9 @@ void render_clip(const Clip& c, const std::string& dir) {
   ScreenManager mgr;
   mgr.set_screen(c.screen);
   UiState ui;
+  static const std::vector<MenuEntry> rows = group_rows();
+  ui.list = rows.data();
+  ui.list_count = static_cast<int>(rows.size());
   ui.accent = RGB(255, 138, 31);
   ui.status = c.status;
   ui.hour = 14;
@@ -353,7 +417,8 @@ void render_clip(const Clip& c, const std::string& dir) {
       mgr.restart_with(ui, TransitionKind::DiskUp,
                        transition_seconds(TransitionKind::DiskUp));
       if (c.screen == Screen::Menu) {
-        ui.menu_index = static_cast<uint8_t>((ui.menu_index + 1) % kMenuCount);
+        ui.menu_index =
+            static_cast<uint8_t>((ui.menu_index + 1) % ui::kGroupCount);
       } else {
         ui.pick = static_cast<Status>((static_cast<int>(ui.pick) + 1) %
                                       static_cast<int>(Status::Count));

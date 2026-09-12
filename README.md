@@ -140,6 +140,10 @@ settings, and everything the device stores is reachable from the knob.
 | **TAP** | touch lock |
 | **CLCK** | 12 or 24 hour |
 
+| | |
+| --- | --- |
+| ![menu](docs/screens/menu.png) | ![setting](docs/screens/setting.png) |
+
 A setting is a row in a table rather than a screen of its own: what it is
 called, what it looks like, what kind of value it holds, and an id that one
 get/set pair switches on. One generic screen serves toggles, numbers and
@@ -171,6 +175,8 @@ out of its own setup on the next boot. If a stored network then becomes
 unreachable for six attempts — you moved house, the password changed — the
 setup network comes back, because the web page needs a network and the panel
 cannot type a password.
+
+![wifi setup](docs/screens/wifisetup.png)
 
 The panel says which of the three it is doing: the network to join, the network
 being tried, or the address to visit. All three are one layout — a signal mark

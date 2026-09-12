@@ -512,7 +512,8 @@ void App::adjust(int detents, float rate) {
       // three transitions in thirty milliseconds, which is what made a fast
       // turn feel like the panel was fighting itself.
       // Both levels of the list scroll identically; only the length differs.
-      const int n = ui_.list_count > 0 ? ui_.list_count : panel::kMenuCount;
+      const int n = ui_.list_count;
+      if (n <= 0) break;
       const int next = wrap_index(static_cast<int>(ui_.menu_index) + detents, n);
       const TransitionKind k = detents > 0 ? TransitionKind::DiskUp : TransitionKind::DiskDown;
       mgr_.restart_with(ui_, k, panel::transition_seconds(k));

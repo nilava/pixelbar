@@ -670,16 +670,21 @@ static void test_screens() {
   const RGB cur = fb.get(kWidth / 2, 7);
   CHECK(cur.r == cur.g && cur.g == cur.b);
 
-  CASE("every menu label fits beside its icon");
-  for (int i = 0; i < kMenuCount; ++i) {
-    CHECK(kMenu[i].icon != nullptr);
-    CHECK(kMenu[i].label != nullptr);
-    CHECK(mini_text_fits(kMenu[i].label));
-  }
-
-  CASE("the menu draws something for every entry, and stays on the panel");
-  for (int i = 0; i < kMenuCount; ++i) {
+  // The menu's contents live in ui::kGroups; test_ui checks the labels fit and
+  // that every entry leads somewhere. What is checked here is the drawing: a
+  // list row is legible and stays inside the panel's power budget, whatever
+  // list it is handed.
+  CASE("a list row draws something, and stays on the panel");
+  const MenuEntry kRows[] = {
+      {&kIconSunCore, "DISP", RGB(255, 200, 60), false},
+      {&kIconHourglass, "TIME", RGB(255, 138, 31), false},
+      {&kIconGear, "CLCK", RGB(200, 200, 255), true},
+  };
+  const int kRowCount = static_cast<int>(sizeof(kRows) / sizeof(kRows[0]));
+  for (int i = 0; i < kRowCount; ++i) {
     UiState mu;
+    mu.list = kRows;
+    mu.list_count = kRowCount;
     mu.menu_index = static_cast<uint8_t>(i);
     ScreenAnim ma;
     Anim man;
@@ -697,6 +702,8 @@ static void test_screens() {
   CASE("an out-of-range menu index falls back rather than reading past the table");
   {
     UiState mu;
+    mu.list = kRows;
+    mu.list_count = kRowCount;
     mu.menu_index = 200;
     ScreenAnim ma;
     Anim man;
@@ -704,6 +711,23 @@ static void test_screens() {
     Framebuffer mfb;
     draw_screen(mfb, Screen::Menu, mu, man, ma);
     CHECK(lit_count(mfb) > 4);
+  }
+
+  CASE("a list screen with no list draws nothing rather than something wrong");
+  {
+    // There used to be a kMenu[] in the panel to fall back on, and once the
+    // settings tree landed it was a four-entry menu the device no longer had —
+    // drawn whenever the model supplied nothing. Drawing nothing is the honest
+    // answer, and it is what makes the model the only source of the list.
+    UiState mu;  // no list, no count
+    ScreenAnim ma;
+    Anim man;
+    man.dt = 0.01f;
+    Framebuffer mfb;
+    draw_screen(mfb, Screen::Menu, mu, man, ma);
+    CHECK_EQ(lit_count(mfb), 0);
+    draw_screen(mfb, Screen::Group, mu, man, ma);
+    CHECK_EQ(lit_count(mfb), 0);
   }
 
   CASE("the boot sequence runs, stays on the panel and fits the budget");

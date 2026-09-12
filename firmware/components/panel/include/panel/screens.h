@@ -31,15 +31,19 @@ RGB status_color(Status s);
 // a cursor over a hue it has no way to apply.
 RGB accent_from_hue(float hue);
 
-// The top-level menu: an icon and a word each, in the order they are shown.
+// One row of a scrolled list: an icon and a word.
+//
+// The list itself lives in `ui`, not here. There used to be a kMenu[] in this
+// file as well, and once the settings tree landed it was a four-entry menu the
+// device no longer had — still rendered whenever nothing else was supplied.
+// The drawing layer now draws the list it is given and nothing when given
+// none, which is the only arrangement with one source of truth in it.
 struct MenuEntry {
   const Icon* icon;
   const char* label;
   RGB color;
   bool spins;  // drawn through draw_sprite_rotated, so it turns while you look
 };
-extern const MenuEntry kMenu[];
-extern const int kMenuCount;
 
 // One row of a scrolled list: icon, label, and ticks showing the position.
 // Shared by Menu and Group, which differ only in what they are a list of —
