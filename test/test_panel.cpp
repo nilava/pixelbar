@@ -491,6 +491,44 @@ static void test_screens() {
     }
   }
 
+  CASE("no two glyphs in the mini font are the same shape");
+  {
+    // A weaker guard than it looks, and worth saying so: R used to read as A
+    // from across a room without being identical to it — at three columns the
+    // eye takes "bowl over two straight legs", and the top row is not enough
+    // to argue with through a diffuser. No test catches that; an eye did. What
+    // this catches is the blunter version, a glyph copy-pasted and never
+    // edited.
+    //
+    // The glyphs are copied by value because mini_glyph_for() returns a
+    // pointer into one shared static for digits, so holding two of them and
+    // comparing compares a glyph with itself. Written the obvious way, this
+    // test reported all forty-five digit pairs as duplicates.
+    const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    // O/0 and S/5 are the same shape and are meant to be. At three by five
+    // there is no room for a slashed zero or a flat-topped five that does not
+    // cost more legibility than the ambiguity does, and nothing on this panel
+    // mixes letters and digits inside one word.
+    auto allowed = [](char a, char b) {
+      return (a == 'O' && b == '0') || (a == 'S' && b == '5');
+    };
+    for (const char* a = alphabet; *a; ++a) {
+      const MiniGlyph* pa = mini_glyph_for(*a);
+      if (!pa) continue;
+      const MiniGlyph ga = *pa;
+      for (const char* b = a + 1; *b; ++b) {
+        const MiniGlyph* pb = mini_glyph_for(*b);
+        if (!pb) continue;
+        const MiniGlyph gb = *pb;
+        if (ga.w != gb.w || allowed(*a, *b)) continue;
+        bool same = true;
+        for (int r = 0; r < kMiniH; ++r)
+          if (ga.rows[r] != gb.rows[r]) { same = false; break; }
+        CHECK(!same);
+      }
+    }
+  }
+
   CASE("the sheen never lights a cell that has nothing in it");
   {
     // Reported from a photograph: a single dim pixel crawling along the bottom

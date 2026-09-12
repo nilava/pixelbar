@@ -40,7 +40,12 @@ const Entry kMini[] = {
   {'O', {{M(1,1,1,0,0), M(1,0,1,0,0), M(1,0,1,0,0), M(1,0,1,0,0), M(1,1,1,0,0)}, 3}},
   {'P', {{M(1,1,1,0,0), M(1,0,1,0,0), M(1,1,1,0,0), M(1,0,0,0,0), M(1,0,0,0,0)}, 3}},
   {'Q', {{M(1,1,1,0,0), M(1,0,1,0,0), M(1,0,1,0,0), M(1,1,1,0,0), M(0,0,1,0,0)}, 3}},
-  {'R', {{M(1,1,1,0,0), M(1,0,1,0,0), M(1,1,1,0,0), M(1,0,1,0,0), M(1,0,1,0,0)}, 3}},
+  // A two-wide bowl, like B and D, so the leg kicks out from under it. With
+  // the full-width bowl this had, R was a flat-topped A: at three columns
+  // the eye reads "bowl over two straight legs" and the top row is not
+  // enough to say otherwise, especially through a diffuser. Reported from
+  // across a room as FREE looking like FAEE.
+  {'R', {{M(1,1,0,0,0), M(1,0,1,0,0), M(1,1,0,0,0), M(1,0,1,0,0), M(1,0,1,0,0)}, 3}},
   {'S', {{M(1,1,1,0,0), M(1,0,0,0,0), M(1,1,1,0,0), M(0,0,1,0,0), M(1,1,1,0,0)}, 3}},
   {'T', {{M(1,1,1,0,0), M(0,1,0,0,0), M(0,1,0,0,0), M(0,1,0,0,0), M(0,1,0,0,0)}, 3}},
   {'U', {{M(1,0,1,0,0), M(1,0,1,0,0), M(1,0,1,0,0), M(1,0,1,0,0), M(1,1,1,0,0)}, 3}},

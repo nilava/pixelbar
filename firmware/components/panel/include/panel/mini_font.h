@@ -32,6 +32,10 @@ struct MiniGlyph {
 };
 
 // Folds lowercase to uppercase. Returns nullptr for characters with no glyph.
+//
+// The pointer for a digit is into a single shared static, rebuilt on each
+// call, so it is valid only until the next one. Holding two and comparing them
+// compares a glyph with itself — copy by value if you need to keep one.
 const MiniGlyph* mini_glyph_for(char c);
 
 int mini_char_advance(char c);          // ink width plus the gap
