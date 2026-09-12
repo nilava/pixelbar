@@ -17,7 +17,19 @@ $(BIN): $(SOURCES) Info.plist
 	swiftc -O -o $@ $(SOURCES) \
 		-framework AppKit -framework SwiftUI \
 		-framework AVFoundation -framework CoreAudio
-	@echo "built $(APP)"
+	@# Ad-hoc signed, with the bundle identifier spelled out.
+	@#
+	@# Not for distribution — this needs no account and no certificate. It is
+	@# for TCC. macOS attributes a Local Network grant to a code identity, and
+	@# swiftc leaves a linker-signed binary whose identifier is "Pixelbar"
+	@# rather than the bundle id, which TCC cannot hold a durable grant
+	@# against. The symptom is precise and misleading: the app finds nothing
+	@# when launchd starts it, and the identical binary works when run from a
+	@# terminal, because there it inherits the terminal's permission.
+	@codesign --force --sign - --identifier com.pixelbar.helper \
+		--options runtime $(APP) 2>/dev/null || \
+		codesign --force --sign - --identifier com.pixelbar.helper $(APP)
+	@echo "built and signed $(APP)"
 
 run: $(BIN)
 	@open $(APP)

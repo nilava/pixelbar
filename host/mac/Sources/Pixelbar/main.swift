@@ -14,6 +14,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var searching = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        // One at a time. `make install` leaves a copy in ~/Applications under a
+        // LaunchAgent, and running the built one from the source tree as well
+        // gives two helpers racing to set the same status on the same panel.
+        let me = ProcessInfo.processInfo.processIdentifier
+        let others = NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.pixelbar.helper")
+            .filter { $0.processIdentifier != me }
+        if !others.isEmpty {
+            // The one already running wins: it is probably the installed copy,
+            // started at login, and the newcomer is probably a test.
+            NSApp.terminate(nil)
+            return
+        }
+
         device = Device(host: Prefs.host)
         controller = Controller(device: device)
 

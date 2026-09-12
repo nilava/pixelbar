@@ -22,9 +22,18 @@ make install    # copies to ~/Applications and starts it at login
 make uninstall
 ```
 
-No Xcode project, no signing, no developer account. `swiftc`, `make`, and a
+No Xcode project, no developer account, no certificate. `swiftc`, `make`, and a
 Mac — nothing else. `~/Applications` rather than `/Applications` because it
 needs no admin rights and belongs to one user.
+
+The build does **ad-hoc sign** the bundle, and that is not about distribution.
+macOS attributes the Local Network permission to a code identity, and `swiftc`
+leaves a linker-signed binary whose identifier is `Pixelbar` rather than the
+bundle id — which TCC cannot hold a durable grant against. The symptom is
+precise and thoroughly misleading: **discovery finds nothing when launchd
+starts the app at login, and the identical binary works when you run it from a
+terminal**, because there it inherits the terminal's own permission. Signing
+with `--identifier com.pixelbar.helper` is the fix, and it needs no account.
 
 On first launch it **finds the panel by itself**. There is nothing to type.
 
