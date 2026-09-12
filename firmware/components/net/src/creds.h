@@ -14,11 +14,6 @@ bool creds_load(char* ssid, size_t ssid_cap, char* pass, size_t pass_cap);
 bool creds_save(const char* ssid, const char* pass);
 bool creds_clear(void);
 
-// Whether the build's credentials have ever been seeded into NVS. Seeding is
-// a once-per-device event, not a once-per-empty-NVS one: see creds.c.
-bool creds_seeded(void);
-bool creds_mark_seeded(void);
-
 #ifdef __cplusplus
 }
 #endif

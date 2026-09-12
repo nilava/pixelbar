@@ -19,18 +19,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-#include "secrets.h"
-
-// Both are optional: provisioning is the ordinary path and these are only a
-// seed for a board on the bench. A secrets.h predating provisioning defines
-// them, a fresh one leaves them empty, and neither needs to be edited.
-#ifndef PIXELBAR_WIFI_SSID
-#define PIXELBAR_WIFI_SSID ""
-#endif
-#ifndef PIXELBAR_WIFI_PASS
-#define PIXELBAR_WIFI_PASS ""
-#endif
-
 static const char* TAG = "net";
 
 // Maximum transmit power, in quarter-dBm units: 34 is 8.5 dBm. The long
@@ -695,29 +683,21 @@ esp_err_t net_start(void) {
                                           on_got_ip, NULL, NULL),
       TAG, "server start");
 
-  // Where the credentials come from, in order of authority.
+  // NVS is the only place credentials come from.
   //
-  // NVS first, always. If it is empty and the build carries a pair, seed NVS
-  // from it once and let NVS own them from then on — so this board keeps
-  // joining the network it already joins, and the first thing set from the
-  // page overrides the build for good. The alternative, letting the compiled
-  // pair win every boot, silently undoes provisioning on the next reflash.
+  // They used to be compiled in from a secrets.h and seeded into NVS on first
+  // boot. That is gone, and not only because the setup page replaced it. A
+  // password written into a header does not stay in the header: it lands in
+  // the object file, the static library, the .elf and the .bin, so an
+  // ordinary build tree quietly becomes five more copies of a secret that
+  // nobody thinks of as holding one. Nothing in these sources has ever seen a
+  // credential now, which is the only way to be sure no build artifact has
+  // either.
   char ssid[33] = {0}, pass[65] = {0};
-  //
-  // Seeding happens once per device, not once per empty NVS. After "forget
-  // this network" NVS is empty too, and re-seeding there would rejoin the
-  // network the user just asked the device to forget.
-  if (!creds_load(ssid, sizeof(ssid), pass, sizeof(pass))) {
-    if (PIXELBAR_WIFI_SSID[0] != '\0' && !creds_seeded()) {
-      creds_save(PIXELBAR_WIFI_SSID, PIXELBAR_WIFI_PASS);
-      creds_mark_seeded();
-      creds_load(ssid, sizeof(ssid), pass, sizeof(pass));
-      ESP_LOGI(TAG, "seeded credentials from the build");
-    }
-  }
+  creds_load(ssid, sizeof(ssid), pass, sizeof(pass));
 
   if (ssid[0] == '\0') {
-    // Nothing stored and nothing compiled in. Straight to setup — and the
+    // Nothing stored. Straight to setup — and the
     // server comes up here rather than on IP_EVENT_STA_GOT_IP, because in
     // setup mode there will not be one.
     ESP_LOGI(TAG, "no credentials: opening setup");
@@ -784,7 +764,9 @@ esp_err_t net_start(void) {
   ESP_LOGI(TAG, "station MAC %02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1],
            mac[2], mac[3], mac[4], mac[5]);
 
-  ESP_LOGI(TAG, "joining %s", PIXELBAR_WIFI_SSID);
+  // The stored SSID, which is broadcast in the clear anyway. The password
+  // is never logged, not even its length.
+  ESP_LOGI(TAG, "joining %s", ssid);
   xTaskCreate(scan_task, "wifi_scan", 3072, NULL, 3, NULL);
   return ESP_OK;
 }

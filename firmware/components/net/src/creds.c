@@ -1,17 +1,14 @@
-// Where the WiFi credentials actually live.
+// Where the WiFi credentials live, which is here and nowhere else.
 //
-// Until now they came from secrets.h and were compiled into the image, which
-// means the device works on exactly one network and changing it is a wired
-// reflash. That is fine for the board on the bench and useless for anything
-// else, so NVS is the source of truth from here and the build-time pair is
-// demoted to a seed.
+// They used to be compiled into the image from a header, which meant the
+// device worked on exactly one network and moving it was a wired reflash.
+// Worse, a password written into a header does not stay in the header: it
+// ends up in the object file, the static library, the .elf and the .bin, so
+// an ordinary build tree quietly becomes five more copies of it.
 //
-// The seeding rule matters more than it looks. If NVS is empty and the build
-// carries credentials, they are written once and then owned by NVS — so an
-// existing board keeps joining the network it already joins, and the very
-// next thing the user does from the web page overrides them for good. If the
-// seed stayed authoritative it would silently undo every change on the next
-// reflash, which is the kind of bug that takes an evening to see.
+// So there is one path in — the setup page — and one place it rests. Nothing
+// in the firmware sources contains a credential, which means no build
+// artifact can either.
 #include "creds.h"
 
 #include <string.h>
@@ -26,11 +23,6 @@ static const char* TAG = "creds";
 // by what the value is, rather than a namespace per subsystem.
 #define CREDS_NS "pixelbar"
 #define CREDS_KEY "wifi"
-// Set the first time the build's credentials are seeded into NVS, and never
-// cleared. Without it, "forget this network" is a no-op with a reboot in the
-// middle: the clear empties NVS, the next boot finds it empty, seeds from
-// secrets.h again, and rejoins the network the user just asked it to forget.
-#define CREDS_SEEDED_KEY "seeded"
 
 typedef struct {
   uint8_t version;
@@ -85,27 +77,6 @@ bool creds_save(const char* ssid, const char* pass) {
   return true;
 }
 
-bool creds_seeded(void) {
-  nvs_handle_t h;
-  if (nvs_open(CREDS_NS, NVS_READONLY, &h) != ESP_OK) return false;
-  uint8_t v = 0;
-  const esp_err_t err = nvs_get_u8(h, CREDS_SEEDED_KEY, &v);
-  nvs_close(h);
-  return err == ESP_OK && v != 0;
-}
-
-bool creds_mark_seeded(void) {
-  nvs_handle_t h;
-  if (nvs_open(CREDS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
-  esp_err_t err = nvs_set_u8(h, CREDS_SEEDED_KEY, 1);
-  if (err == ESP_OK) err = nvs_commit(h);
-  nvs_close(h);
-  return err == ESP_OK;
-}
-
-// Deliberately leaves the seeded marker alone. Clearing it too would put the
-// build's credentials back on the next boot, which is the opposite of what
-// the user asked for.
 bool creds_clear(void) {
   nvs_handle_t h;
   if (nvs_open(CREDS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
