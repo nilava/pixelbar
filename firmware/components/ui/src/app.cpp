@@ -794,8 +794,20 @@ void App::handle(const Event& e, double now_s) {
         enter_menu_entry();
       } else if (screen() == Screen::StatusPick) {
         // Pressing commits what you were previewing, and the claim animation
-        // plays on the way back out.
+        // plays on the way back out — onto the status view, whichever view you
+        // were on before.
+        //
+        // go_home() returns to kHomeViews[view_], so claiming a status while
+        // the knob had last been left on the clock put you back on the clock:
+        // the one screen guaranteed not to show the thing you just chose. The
+        // room sees a clock, and so do you.
         const Status chosen = ui_.pick;
+        for (int i = 0; i < kHomeViewCount; ++i) {
+          if (kHomeViews[i] == Screen::Status) {
+            view_ = i;
+            break;
+          }
+        }
         go_home();
         set_status(chosen);
       } else if (depth_ > 1) {

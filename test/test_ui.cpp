@@ -1172,6 +1172,33 @@ void test_app_adjust() {
     CHECK_EQ(r.app.depth(), 1);
   }
 
+  CASE("and it shows the status even if you were looking at something else");
+  {
+    // This passed for the wrong reason: the rig starts on the status view, so
+    // "go home" happened to land there. Turn the knob away first and the bug
+    // appears — go_home() returns to whichever home view you last chose, which
+    // after claiming a status is the one screen guaranteed not to show it.
+    AppRig r;
+    r.turn(1);
+    r.settle();
+    CHECK(r.app.screen() != panel::Screen::Status);   // on the clock now
+
+    r.enter("STAT");
+    r.turn(1);                                        // pick something else
+    r.settle();
+    const panel::Status chosen = r.app.state().pick;
+    r.press();
+    r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
+    CHECK_EQ(static_cast<int>(r.app.state().status), static_cast<int>(chosen));
+
+    // And the carousel agrees with what is on screen: turning once from here
+    // goes to the next view, not back to the status you are already on.
+    r.turn(1);
+    r.settle();
+    CHECK(r.app.screen() != panel::Screen::Status);
+  }
+
   CASE("turning on the brightness screen changes brightness, and clamps");
   {
     AppRig r;
