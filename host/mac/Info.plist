@@ -16,6 +16,8 @@
        responsible process, discovery silently finds nothing, and the only clue
        is that the identical binary works when run from a terminal, because
        there it inherits the terminal's permission. -->
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Pixelbar talks to your panel over Bluetooth when Wi-Fi is not available.</string>
   <key>NSLocalNetworkUsageDescription</key>
   <string>Pixelbar finds your panel on this network and sends it your status.</string>
 </dict>

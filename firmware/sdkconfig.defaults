@@ -32,3 +32,25 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # A firmware image is about 875 KB over a home LAN. The default 5 s recv
 # timeout ends the upload part way through on a slow link.
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
+# Bluetooth Low Energy, alongside WiFi.
+#
+# NimBLE rather than Bluedroid: Bluedroid is the fuller stack and roughly three
+# times the flash, and there is one 1.66 MB app slot shared with WiFi, lwIP, an
+# HTTP server and OTA.
+#
+# The C3 has one radio and one core, so WiFi and BLE take turns. Software
+# coexistence is what arbitrates that; without it the two stacks fight and both
+# get worse. The LED output is unaffected either way — it is DMA from SRAM once
+# a frame is queued, which is the same property that made OTA survivable.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+# Nothing here scans or connects outward; leaving the central roles out saves
+# flash for the same reason NimBLE was chosen over Bluedroid.
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y

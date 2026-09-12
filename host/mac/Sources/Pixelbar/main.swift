@@ -60,14 +60,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             state = "Paused"
         } else if let p = controller.pushed {
             state = "Showing \(p.label)"
-        } else if controller.reachable {
+        } else if controller.anyLink {
             state = "Watching"
         } else {
             state = "Panel unreachable"
         }
         menu.addItem(withTitle: state, action: nil, keyEquivalent: "")
 
-        let detail = "Mic \(controller.micOn ? "on" : "off") · Camera \(controller.camOn ? "on" : "off")"
+        let detail = "Mic \(controller.micOn ? "on" : "off") · Camera "
+            + "\(controller.camOn ? "on" : "off") · \(controller.link.rawValue)"
         let d = NSMenuItem(title: detail, action: nil, keyEquivalent: "")
         d.isEnabled = false
         menu.addItem(d)

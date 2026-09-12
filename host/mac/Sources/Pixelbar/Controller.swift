@@ -36,7 +36,12 @@ final class Controller: ObservableObject {
     @Published private(set) var pushed: Status?     // what we last set, if anything
     @Published var paused: Bool = Prefs.paused { didSet { Prefs.paused = paused; Task { await settle() } } }
 
+    /// Which pipe the last command actually went down.
+    enum Link: String { case wifi = "Wi-Fi", bluetooth = "Bluetooth", none = "no link" }
+    @Published private(set) var link: Link = .none
+
     private let device: Device
+    private let ble = BLETransport()
     private var mic: MicMonitor?
     private var releaseTask: Task<Void, Never>?
 
@@ -66,6 +71,7 @@ final class Controller: ObservableObject {
         }
         micOn = MicMonitor.anyInputRunning()
         camOn = CameraMonitor.anyRunning()
+        ble.onReady = { [weak self] _ in Task { @MainActor in self?.objectWillChange.send() } }
         Task { await poll() }
     }
 
@@ -101,7 +107,7 @@ final class Controller: ObservableObject {
             if displaced == nil { displaced = await currentStatus() }
             if pushed != want {
                 pushed = want
-                _ = await device.setStatus(want)
+                await send(want)
             }
             return
         }
@@ -122,7 +128,7 @@ final class Controller: ObservableObject {
         let back = displaced ?? .free
         displaced = nil
         pushed = nil
-        _ = await device.setStatus(back)
+        await send(back)
     }
 
     /// Called when the pause switch moves, so pausing hands the panel straight
@@ -154,5 +160,25 @@ final class Controller: ObservableObject {
     }
 
     func host() async -> String { await device.currentHost() }
-    func send(_ s: Status) async { _ = await device.setStatus(s) }
+    /// WiFi first, Bluetooth second.
+    ///
+    /// Not a preference so much as an ordering by capability: WiFi is the pipe
+    /// that also carries firmware and a web page, so when it is there it is the
+    /// one to use. Bluetooth needs no credentials, no router and no address,
+    /// which is exactly when it is the only one left.
+    func send(_ s: Status) async {
+        if await device.setStatus(s) {
+            link = .wifi
+            return
+        }
+        if ble.ready {
+            ble.send(["status": s.rawValue])
+            link = .bluetooth
+            return
+        }
+        link = .none
+    }
+
+    /// True if either pipe can reach the panel.
+    var anyLink: Bool { reachable || ble.ready }
 }

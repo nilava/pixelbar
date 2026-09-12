@@ -13,9 +13,11 @@
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
 #include "esp_timer.h"
+#include "esp_mac.h"
 #include "esp_wifi.h"
 #include "captive_dns.h"
 #include "creds.h"
+#include "ble.h"
 #include "discovery.h"
 #include "ota.h"
 #include "freertos/FreeRTOS.h"
@@ -382,9 +384,7 @@ static esp_err_t get_root(httpd_req_t* r) {
                          index_html_gz_end - index_html_gz_start);
 }
 
-static esp_err_t get_state(httpd_req_t* r) {
-  // Local time as the panel has it, so a wrong timezone is visible from the
-  // page rather than only from standing in front of the device.
+int net_state_json(char* out, size_t cap) {
   char clock[8] = "--:--";
   if (s_time_valid) {
     const time_t now = time(NULL);
@@ -392,9 +392,8 @@ static esp_err_t get_state(httpd_req_t* r) {
     localtime_r(&now, &tm);
     snprintf(clock, sizeof(clock), "%02d:%02d", tm.tm_hour, tm.tm_min);
   }
-  char buf[440];
   const int n = snprintf(
-      buf, sizeof(buf),
+      out, cap,
       "{\"screen\":\"%s\",\"status\":\"%s\",\"brightness\":%u,"
       "\"timer_left\":%d,\"timer_running\":%s,\"fps\":%.1f,"
       "\"detents\":%ld,\"illegal\":%lu,\"ip\":\"%s\","
@@ -404,30 +403,43 @@ static esp_err_t get_state(httpd_req_t* r) {
       s_status.timer_running ? "true" : "false", s_status.fps,
       (long)s_status.detents, (unsigned long)s_status.illegal, s_ip, clock,
       (int)s_status.menu_index, s_status.set_label, s_status.set_text);
+  // snprintf returns what it *would* have written. Clamp, or the caller sends
+  // a length that runs past the buffer it was given.
+  if (n < 0) return 0;
+  return n < (int)cap ? n : (int)cap - 1;
+}
+
+static esp_err_t get_state(httpd_req_t* r) {
+  char buf[440];
+  const int n = net_state_json(buf, sizeof(buf));
   httpd_resp_set_type(r, "application/json");
-  // snprintf returns what it *would* have written, not what it did. Passing
-  // that straight to httpd_resp_send means that the moment this JSON outgrows
-  // buf the response reads past the end of it — and this string has gained
-  // three fields in a day. Clamp to what is actually there.
-  const int len = (n < 0) ? 0 : (n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1);
-  return httpd_resp_send(r, buf, len);
+  return httpd_resp_send(r, buf, n);
+}
+
+// The command vocabulary, independent of how it arrived.
+//
+// Extracted so that a write over Bluetooth and a POST over WiFi are the same
+// input in the same words. Two transports parsing the same JSON slightly
+// differently would be a bug nobody finds until the day one is unavailable and
+// the other is all you have.
+int net_apply_input_json(const char* body) {
+  int v = 0, n = 0;
+  if (field(body, "\"tap\"", &v)) { push(NET_CMD_TAP, (int16_t)v); ++n; }
+  if (field(body, "\"hold\"", &v)) { push(NET_CMD_HOLD, (int16_t)v); ++n; }
+  if (field(body, "\"release\"", &v)) { push(NET_CMD_RELEASE, (int16_t)v); ++n; }
+  if (field(body, "\"swipe\"", &v)) { push(NET_CMD_SWIPE, (int16_t)v); ++n; }
+  if (field(body, "\"turn\"", &v)) { push(NET_CMD_TURN, (int16_t)v); ++n; }
+  if (field(body, "\"press\"", &v)) { push(NET_CMD_PRESS, 0); ++n; }
+  if (field(body, "\"presshold\"", &v)) { push(NET_CMD_PRESS_HOLD, 0); ++n; }
+  if (field(body, "\"status\"", &v)) { push(NET_CMD_STATUS, (int16_t)v); ++n; }
+  if (field(body, "\"brightness\"", &v)) { push(NET_CMD_BRIGHTNESS, (int16_t)v); ++n; }
+  return n;
 }
 
 static esp_err_t post_input(httpd_req_t* r) {
   char body[192];
   if (!body_of(r, body, sizeof(body))) return httpd_resp_send_500(r);
-
-  int v = 0;
-  if (field(body, "\"tap\"", &v)) push(NET_CMD_TAP, (int16_t)v);
-  if (field(body, "\"hold\"", &v)) push(NET_CMD_HOLD, (int16_t)v);
-  if (field(body, "\"release\"", &v)) push(NET_CMD_RELEASE, (int16_t)v);
-  if (field(body, "\"swipe\"", &v)) push(NET_CMD_SWIPE, (int16_t)v);
-  if (field(body, "\"turn\"", &v)) push(NET_CMD_TURN, (int16_t)v);
-  if (field(body, "\"press\"", &v)) push(NET_CMD_PRESS, 0);
-  if (field(body, "\"presshold\"", &v)) push(NET_CMD_PRESS_HOLD, 0);
-  if (field(body, "\"status\"", &v)) push(NET_CMD_STATUS, (int16_t)v);
-  if (field(body, "\"brightness\"", &v)) push(NET_CMD_BRIGHTNESS, (int16_t)v);
-
+  net_apply_input_json(body);
   httpd_resp_set_type(r, "application/json");
   return httpd_resp_send(r, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
@@ -689,6 +701,20 @@ esp_err_t net_start(void) {
                                           .name = "ap_down"};
   ESP_RETURN_ON_ERROR(esp_timer_create(&apargs, &s_ap_down_timer), TAG, "ap timer");
 
+  // Bluetooth first, and unconditionally.
+  //
+  // It does not depend on credentials, on a router, or on anything being
+  // discovered — which is exactly why it is worth having beside WiFi rather
+  // than instead of it. A panel with no network at all is still a panel a Mac
+  // beside it can drive.
+  {
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char name[24];
+    snprintf(name, sizeof(name), "Pixelbar-%02X%02X", mac[4], mac[5]);
+    if (ble_start(name) != ESP_OK) ESP_LOGW(TAG, "bluetooth unavailable");
+  }
+
   ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif");
   ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "event loop");
   esp_netif_create_default_wifi_sta();
@@ -806,7 +832,19 @@ void net_mark_healthy(void) { ota_mark_healthy(); }
 
 bool net_connected(void) { return s_connected; }
 const char* net_ip(void) { return s_ip; }
-void net_publish(const net_status_t* s) { s_status = *s; }
+void net_publish(const net_status_t* s) {
+  s_status = *s;
+  // Notified at about 4 Hz rather than the 100 Hz this is called at. A BLE
+  // connection event is a scheduled slot on a radio shared with WiFi, and
+  // filling every one of them with a status nobody asked for is how you make
+  // both transports worse.
+  static int64_t last_us = 0;
+  const int64_t now = esp_timer_get_time();
+  if (now - last_us >= 250000) {
+    last_us = now;
+    ble_publish();
+  }
+}
 
 bool net_take_cmd(net_cmd_t* out) {
   if (!s_cmds) return false;

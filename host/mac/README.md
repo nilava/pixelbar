@@ -51,6 +51,23 @@ this device*, which is a different question from *what is that process
 recording*. A helper that had to request microphone access in order to notice
 the microphone was busy would be a worse trade than the feature is worth.
 
+## Two ways to reach the panel
+
+**Wi-Fi first, Bluetooth second.** Not really a preference — an ordering by
+capability. Wi-Fi is the pipe that also carries firmware images and the web
+page, so when it is there it is the one to use. Bluetooth needs no credentials,
+no router, no address and no discovery at all, which is exactly the situation
+in which it is the only one left: a panel that has never been provisioned, or
+one whose network is down, or a network that blocks traffic between two clients.
+
+The menu says which one is carrying commands.
+
+Both speak the same JSON. A write to the Bluetooth command characteristic and a
+`POST /api/input` are the same input in the same words, parsed by the same
+function on the device — two transports that disagreed slightly about what a
+command meant would be a bug nobody finds until the day one of them is all
+there is.
+
 ## How it finds the panel
 
 Two ways, in this order, because neither works everywhere.
