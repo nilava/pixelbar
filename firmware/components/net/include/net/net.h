@@ -89,6 +89,11 @@ const char* net_panel_text(void);
 // screen whenever this is not negative.
 float net_ota_progress(void);
 
+// The Bluetooth pairing code the panel should be showing, or 0. Six digits
+// that exist nowhere else, which is what makes a bond mean the host is in the
+// room rather than merely within radio range.
+uint32_t net_passkey(void);
+
 // Confirms the running image so the bootloader stops holding the previous one
 // in reserve. Call it only once the device has demonstrably survived: doing it
 // at startup would defeat the point of rollback entirely.

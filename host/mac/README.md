@@ -68,6 +68,34 @@ function on the device — two transports that disagreed slightly about what a
 command meant would be a bug nobody finds until the day one of them is all
 there is.
 
+## Bluetooth pairing
+
+**The panel shows a six-digit code and macOS asks you to type it.**
+
+That is not ceremony. Without it, anything within about ten metres could drive
+the panel — a different and worse posture than the HTTP API, because a home LAN
+at least has a door on it. Bluetooth's own answer to this is "Just Works"
+bonding, which encrypts the link against eavesdroppers and authenticates
+nobody: anything in range can bond, and is then trusted for good.
+
+A passkey fixes the half that matters. The code is generated on the device from
+its hardware random number generator, exists nowhere else, and is displayed on
+a panel you have to be looking at — so a host that can produce it is a host in
+the room. The command characteristic requires an authenticated link, so there
+is no way to drive the panel without having done this once.
+
+Use **Pair over Bluetooth…** from the menu. It is deliberate rather than
+automatic because the alternative is being asked to read six digits off a panel
+at whatever moment your microphone first happens to open.
+
+Reading the panel's state needs an encrypted link but not an authenticated one:
+what it returns is what the panel is already showing the room, and charging a
+pairing prompt to keep a secret that is painted on the wall would be theatre.
+
+A host that bonded before and comes back with new keys — a Mac that was
+re-imaged, say — is re-paired rather than refused, because the alternative is a
+device nobody can reconnect to and nothing on it to clear the old bond from.
+
 ## How it finds the panel
 
 Two ways, in this order, because neither works everywhere.

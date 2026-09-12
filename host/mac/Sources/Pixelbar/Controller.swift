@@ -181,4 +181,20 @@ final class Controller: ObservableObject {
 
     /// True if either pipe can reach the panel.
     var anyLink: Bool { reachable || ble.ready }
+    var bluetoothReady: Bool { ble.ready }
+
+    /// Deliberately provoke Bluetooth pairing.
+    ///
+    /// The command characteristic needs an authenticated link, so the *first*
+    /// write triggers pairing — and without this that would happen at whatever
+    /// random moment a microphone first opened, which is a poor time to be
+    /// asked to read six digits off a panel and type them into a dialog. This
+    /// makes it a thing you sit down and do.
+    func pair() async {
+        guard ble.ready else { return }
+        // A write whose effect is nothing: the status it already has. What
+        // matters is that it is a write, and therefore needs the link secured.
+        let current = await currentStatus() ?? .free
+        ble.send(["status": current.rawValue])
+    }
 }

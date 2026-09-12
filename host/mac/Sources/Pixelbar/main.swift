@@ -105,6 +105,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(setItem)
         menu.addItem(.separator())
 
+        let pairItem = NSMenuItem(title: controller.bluetoothReady
+                                    ? "Pair over Bluetooth…" : "Bluetooth: no panel in range",
+                                  action: #selector(pairBluetooth), keyEquivalent: "")
+        pairItem.target = self
+        pairItem.isEnabled = controller.bluetoothReady
+        menu.addItem(pairItem)
+
         let findItem = NSMenuItem(title: "Find panel", action: #selector(findPanel), keyEquivalent: "")
         findItem.target = self
         menu.addItem(findItem)
@@ -133,6 +140,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func findPanel() { Task { await autoFind(announce: true) } }
+
+    @objc private func pairBluetooth() {
+        Task {
+            await controller.pair()
+            note("The panel is showing a six-digit code. macOS will ask for it "
+                 + "in a moment — type what the panel shows.\n\nThe code exists "
+                 + "nowhere else, so a host that can produce it is a host in the "
+                 + "room.")
+        }
+    }
 
     /// Broadcast, then sweep, then ask. `announce` is false at startup so a
     /// first launch on a network with no panel on it is quiet rather than

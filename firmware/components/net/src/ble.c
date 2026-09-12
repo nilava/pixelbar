@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_nimble_hci.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
@@ -26,6 +27,7 @@
 #include "nimble/nimble_port_freertos.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "store/config/ble_store_config.h"
 
 static const char* TAG = "ble";
 
@@ -50,6 +52,18 @@ static uint8_t s_addr_type;
 static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_state_handle;
 static char s_name[24] = "Pixelbar";
+
+// The six digits currently on the panel, or 0 for "not pairing".
+//
+// Displaying the passkey is what makes this worth doing. Just Works bonding
+// encrypts the link and stops a passer-by writing to it, but it authenticates
+// nobody: anything in range can bond and then it is trusted for good. A code
+// that only exists on a panel in front of you means the thing you paired with
+// is the thing you are looking at — which is the entire question being asked,
+// and a 24x8 display is unusually well suited to answering it.
+static uint32_t s_passkey = 0;
+
+uint32_t ble_passkey(void) { return s_passkey; }
 
 bool ble_connected(void) { return s_conn != BLE_HS_CONN_HANDLE_NONE; }
 
@@ -89,13 +103,27 @@ static const struct ble_gatt_svc_def kServices[] = {
                 // the one thing this is for.
                 .uuid = &kCmdUuid.u,
                 .access_cb = on_cmd,
-                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+                // ENC and AUTHEN, not plain WRITE. Without these the panel is
+                // controllable by anything within about ten metres, which is a
+                // different security posture from the HTTP API on a home LAN
+                // and a worse one: a LAN has a door on it.
+                //
+                // AUTHEN is the half that matters. ENC alone is satisfied by
+                // Just Works, which encrypts against eavesdropping and
+                // authenticates nobody.
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP |
+                         BLE_GATT_CHR_F_WRITE_ENC | BLE_GATT_CHR_F_WRITE_AUTHEN,
             },
             {
                 .uuid = &kStateUuid.u,
                 .access_cb = on_state,
                 .val_handle = &s_state_handle,
-                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                // Encrypted, but not authenticated. What this returns is what
+                // the panel is already displaying to the room, so guarding it
+                // as heavily as the ability to *change* it would be paying a
+                // pairing prompt to keep a secret that is painted on the wall.
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY |
+                         BLE_GATT_CHR_F_READ_ENC,
             },
             {0},
         },
@@ -109,6 +137,27 @@ static int on_gap(struct ble_gap_event* ev, void* arg) {
       if (ev->connect.status == 0) {
         s_conn = ev->connect.conn_handle;
         ESP_LOGI(TAG, "connected");
+        // Ask for a slower connection, immediately.
+        //
+        // A central picks the interval, and macOS picks an aggressive one for
+        // latency it assumes you want. Measured: an idle BLE connection at
+        // whatever CoreBluetooth chose took this panel from 100 fps to 63 —
+        // a connection *event* is a slot on a radio shared with WiFi, and on a
+        // single-core chip the cost lands squarely in the frame budget.
+        //
+        // 150-300 ms is far slower than the default and far faster than
+        // anything here needs: the traffic is a status push when a microphone
+        // opens and a state notify four times a second. Nobody perceives a
+        // quarter-second on either.
+        struct ble_gap_upd_params p = {
+            .itvl_min = 120,   // x1.25 ms
+            .itvl_max = 240,
+            .latency = 0,
+            // Comfortably more than (1 + latency) x itvl_max x 2, which is the
+            // rule that makes a link stable rather than one that keeps dropping.
+            .supervision_timeout = 400,  // x10 ms
+        };
+        ble_gap_update_params(ev->connect.conn_handle, &p);
       } else {
         advertise();
       }
@@ -121,6 +170,40 @@ static int on_gap(struct ble_gap_event* ev, void* arg) {
     case BLE_GAP_EVENT_ADV_COMPLETE:
       advertise();
       return 0;
+
+    case BLE_GAP_EVENT_PASSKEY_ACTION: {
+      if (ev->passkey.params.action != BLE_SM_IOACT_DISP) return 0;
+      // Six digits from the hardware random number generator, not from a
+      // counter and not from the clock. esp_random is fed by the radio's noise
+      // and is exactly what this is for; a predictable code is not a code.
+      struct ble_sm_io io = {.action = BLE_SM_IOACT_DISP};
+      io.passkey = esp_random() % 1000000u;
+      s_passkey = io.passkey ? io.passkey : 1;  // 0 means "not pairing"
+      ESP_LOGI(TAG, "pairing: show %06lu on the panel", (unsigned long)s_passkey);
+      ble_sm_inject_io(ev->passkey.conn_handle, &io);
+      return 0;
+    }
+
+    case BLE_GAP_EVENT_ENC_CHANGE:
+      // Pairing finished, one way or the other. The code comes off the panel
+      // either way: a failed attempt should not leave a number on display that
+      // someone could still type.
+      s_passkey = 0;
+      ESP_LOGI(TAG, "link security: %s",
+               ev->enc_change.status == 0 ? "established" : "refused");
+      return 0;
+
+    case BLE_GAP_EVENT_REPEAT_PAIRING:
+      // A central that bonded before and is presenting itself again. Drop the
+      // old bond and let it pair afresh rather than refusing: the alternative
+      // is a Mac that was re-imaged being permanently unable to reconnect,
+      // with nothing on the device to clear it from.
+      {
+        struct ble_gap_conn_desc desc;
+        if (ble_gap_conn_find(ev->repeat_pairing.conn_handle, &desc) == 0)
+          ble_store_util_delete_peer(&desc.peer_id_addr);
+      }
+      return BLE_GAP_REPEAT_PAIRING_RETRY;
     default:
       return 0;
   }
@@ -198,6 +281,18 @@ esp_err_t ble_start(const char* name) {
 
   ble_hs_cfg.sync_cb = on_sync;
   ble_hs_cfg.reset_cb = on_reset;
+  // The device can show a number and cannot take one in. That is precisely
+  // DisplayOnly, and it is what selects passkey-display pairing over Just
+  // Works: the central has a keyboard, the panel has a display, and between
+  // them that is enough for authenticated pairing.
+  ble_hs_cfg.sm_io_cap = BLE_HS_IO_DISPLAY_ONLY;
+  ble_hs_cfg.sm_bonding = 1;
+  ble_hs_cfg.sm_mitm = 1;   // the half Just Works does not give you
+  ble_hs_cfg.sm_sc = 1;     // Secure Connections: ECDH rather than legacy
+  ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+  ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+  // Bonds live in NVS, so a paired Mac reconnects silently after a power cut.
+  ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
   ble_svc_gap_init();
   ble_svc_gatt_init();

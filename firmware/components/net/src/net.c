@@ -828,6 +828,7 @@ esp_err_t net_start(void) {
 }
 
 float net_ota_progress(void) { return ota_progress(); }
+uint32_t net_passkey(void) { return ble_passkey(); }
 void net_mark_healthy(void) { ota_mark_healthy(); }
 
 bool net_connected(void) { return s_connected; }

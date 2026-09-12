@@ -45,6 +45,8 @@ class DevicePorts : public ui::Ports {
   // knows nothing about the radio.
   float ota_progress() override { return ota_; }
   void set_ota(float p) { ota_ = p; }
+  uint32_t passkey() override { return passkey_; }
+  void set_passkey(uint32_t k) { passkey_ = k; }
 
   void set_net(ui::Ports::NetMode m, const char* text) {
     net_mode_ = m;
@@ -93,6 +95,7 @@ class DevicePorts : public ui::Ports {
   ui::Ports::NetMode net_mode_ = ui::Ports::NetMode::Online;
   const char* net_text_ = "";
   float ota_ = -1.0f;
+  uint32_t passkey_ = 0;
   double uptime_s_ = 0.0;
 };
 

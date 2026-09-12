@@ -84,6 +84,7 @@ enum class Screen : uint8_t {
   WifiConnecting,  // trying the credentials someone just typed
   WifiInfo,        // the address, so you can reach the page from your own network
   OtaProgress,     // a firmware update is being written; do not unplug it
+  Pairing,         // the six digits a Bluetooth host must be told
   Count,
 };
 
@@ -168,6 +169,11 @@ struct UiState {
 
   // How far through a firmware update, 0..1, or negative when none is running.
   float ota = -1.0f;
+
+  // The Bluetooth pairing code, or 0 when nothing is pairing. Six digits, and
+  // the only place they exist: that is what makes the bond mean the host is in
+  // the room rather than merely in range.
+  uint32_t passkey = 0;
   bool wifi_connected = false;
 };
 

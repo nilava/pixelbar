@@ -136,6 +136,17 @@ void App::update(float dt_s, double now_s) {
       go_home();  // the upload failed; put the device back where it was
     }
 
+    // Pairing, the same way. It outranks everything except an update, because
+    // a code nobody can read is a code nobody can use, and it is on screen for
+    // about twenty seconds once in the life of a host.
+    ui_.passkey = ports_->passkey();
+    if (ui_.passkey != 0 && screen() != panel::Screen::Pairing &&
+        screen() != panel::Screen::OtaProgress) {
+      show_net(panel::Screen::Pairing);
+    } else if (ui_.passkey == 0 && screen() == panel::Screen::Pairing) {
+      go_home();
+    }
+
     // A device with nothing stored cannot be set up from the panel — there is
     // no way to type a password into 24 pixels — so the only useful thing it
     // can do is say which network to join. It says so once, when setup mode

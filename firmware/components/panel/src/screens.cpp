@@ -119,6 +119,7 @@ const char* screen_name(Screen s) {
     case Screen::WifiConnecting: return "wificonnecting";
     case Screen::WifiInfo: return "wifiinfo";
     case Screen::OtaProgress: return "ota";
+    case Screen::Pairing: return "pairing";
     default: return "?";
   }
 }
@@ -780,6 +781,33 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       const int lit_cols = static_cast<int>(p * kWidth + 0.5f);
       for (int x = 0; x < kWidth; x += 4)
         fb.set(x, 7, x < lit_cols ? lit : warm.scaled(20));
+      break;
+    }
+
+    case Screen::Pairing: {
+      // Six digits across 24 columns. The tiny face is three wide a digit plus
+      // a gap, so six of them are exactly 23 — which fits, once, and is the
+      // reason this screen shows a passkey rather than anything longer.
+      const RGB c = RGB(120, 200, 255);
+      const float k = 0.75f + 0.25f * a.wave(1.6f);
+      const RGB lit = c.scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
+      const int w = tiny_number_width(6);
+      draw_tiny_number(fb, (kWidth - w) / 2, 1, static_cast<int>(ui.passkey % 1000000u),
+                       6, lit);
+      // A travelling mark underneath rather than a lit rail, so it reads as
+      // something happening rather than as a number the panel has decided to
+      // display.
+      //
+      // A full-width comet tail at 90/255 measured 2301 mA of the 2500 mA cap,
+      // and a frame over the cap is scaled down — which would have dimmed the
+      // digits to make room for their own decoration. Six digits are the point
+      // of this screen; the mark is not.
+      const float head = a.phase(2.0f) * kWidth;
+      for (int k = 0; k < 4; ++k) {
+        const int x = static_cast<int>(head) - k;
+        if (x < 0 || x >= kWidth) continue;
+        fb.set(x, 7, c.scaled(static_cast<uint8_t>(70 - k * 18)));
+      }
       break;
     }
 

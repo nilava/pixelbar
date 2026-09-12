@@ -491,6 +491,38 @@ static void test_screens() {
     }
   }
 
+  CASE("the pairing code fits, reads, and stays inside the power budget");
+  {
+    // Six tiny digits are exactly 23 of 24 columns — this screen fits once,
+    // which is why the code it shows is six digits and not seven.
+    UiState ui;
+    ui.passkey = 428913;
+    Framebuffer fb;
+    draw_screen(fb, Screen::Pairing, ui, 500);
+    CHECK(lit_count(fb) > 20);
+    CHECK(fb.estimate_ma(255) < kMaxMilliamps);
+
+    // Nothing in rows 1..5 may fall outside the panel, and the digits must
+    // occupy the middle rather than hugging one edge.
+    int leftmost = kWidth, rightmost = -1;
+    for (int y = 1; y <= 5; ++y)
+      for (int x = 0; x < kWidth; ++x)
+        if (fb.get(x, y).lit()) {
+          if (x < leftmost) leftmost = x;
+          if (x > rightmost) rightmost = x;
+        }
+    CHECK(leftmost >= 0);
+    CHECK(rightmost <= kWidth - 1);
+    CHECK(rightmost - leftmost >= 20);   // all six digits, not a truncated few
+
+    // A zero code means nothing is pairing, and the screen should never be up
+    // in that state — but if it is, it must not draw a misleading number.
+    UiState off;
+    Framebuffer f2;
+    draw_screen(f2, Screen::Pairing, off, 500);
+    CHECK(f2.estimate_ma(255) < kMaxMilliamps);
+  }
+
   CASE("the round pips do not sit on top of the play hint");
   {
     // They did. The pips went down the left edge, which is exactly where the

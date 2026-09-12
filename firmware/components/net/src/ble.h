@@ -1,6 +1,7 @@
 // The Bluetooth transport. Private to the net component.
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 
@@ -13,6 +14,12 @@ extern "C" {
 esp_err_t ble_start(const char* name);
 
 bool ble_connected(void);
+
+// The six-digit pairing code currently on the panel, or 0 when not pairing.
+// Displaying it is what makes the bond mean something: a code that exists only
+// on a panel in front of you proves the thing you paired with is the thing you
+// are looking at.
+uint32_t ble_passkey(void);
 
 // Notifies the state characteristic, if anything is connected and listening.
 // Cheap enough to call on a timer, not cheap enough to call every frame.

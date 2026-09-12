@@ -45,6 +45,11 @@ struct Ports {
   // update is the one state where what the device is doing matters more than
   // whatever you were looking at.
   virtual float ota_progress() { return -1.0f; }
+
+  // The Bluetooth pairing code, or 0 when nothing is pairing. Like an update,
+  // this takes the panel: it is the one moment where what the device needs to
+  // say matters more than whatever you were looking at.
+  virtual uint32_t passkey() { return 0; }
 };
 
 }  // namespace ui
