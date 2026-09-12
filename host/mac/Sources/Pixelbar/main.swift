@@ -250,11 +250,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // which one they are on.
             let a = NSAlert()
             a.messageText = "Bluetooth setup did not finish"
-            a.informativeText = "\(why)\n\nTry over Wi-Fi instead?"
-            a.addButton(withTitle: "Try Wi-Fi")
+            // Wi-Fi is only offered when it could possibly work.
+            //
+            // A panel that has never been provisioned is sitting on its own
+            // access point and is not on this network at all, so discovery
+            // cannot find it however long it looks — offering the fallback
+            // there produces "can't find the panel over Wi-Fi", which is true
+            // and tells nobody anything. It is a real fallback only once the
+            // panel has a network of its own to be found on.
+            let wifiPossible = !Prefs.host.isEmpty
+            a.informativeText = wifiPossible
+                ? "\(why)\n\nTry over Wi-Fi instead?"
+                : "\(why)\n\nWi-Fi is not an alternative yet: until the panel "
+                  + "has joined a network it is on its own setup access point "
+                  + "and nothing on this network can reach it."
+            if wifiPossible { a.addButton(withTitle: "Try Wi-Fi") }
             a.addButton(withTitle: "Cancel")
             NSApp.activate(ignoringOtherApps: true)
-            if a.runModal() == .alertFirstButtonReturn { await runWifiSetup() }
+            if a.runModal() == .alertFirstButtonReturn && wifiPossible {
+                await runWifiSetup()
+            }
         }
         rebuildMenu()
     }

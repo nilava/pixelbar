@@ -45,10 +45,47 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
     /// The link came up secured — which is the only signal that pairing
     /// actually completed, because CoreBluetooth has no such callback.
     var onSecured: (() -> Void)?
-    /// True once an operation has actually been accepted, which is the only
-    /// evidence the link is encrypted and authenticated. `ready` means only
-    /// that the characteristic was found, and finding one requires no security.
+    /// True once an operation *we asked for* on an authenticated characteristic
+    /// has been accepted. Nothing else counts as evidence.
+    ///
+    /// This used to be set by any successful `didUpdateValueFor`, and that
+    /// callback carries notifications as well as read responses. The panel
+    /// notifies its state four times a second, so the first of those — arriving
+    /// down an unencrypted link, unasked for, before anybody had typed
+    /// anything — set this true and the whole ceremony was skipped. Setup then
+    /// walked into a provisioning write that could only be refused, reported
+    /// that the panel could see no networks, and offered Wi-Fi instead, which
+    /// cannot possibly work: an unprovisioned panel is sitting on its own
+    /// access point and is not on this network at all.
+    ///
+    /// Two conditions, both necessary. *We asked*, because an unsolicited value
+    /// says nothing about what we are allowed to do; and *authenticated*,
+    /// because the state characteristic is only READ_ENC, which Just Works
+    /// satisfies without anyone reading a passkey off the panel.
     private(set) var secured = false
+
+    /// Characteristics that need the passkey, not merely encryption. Only a
+    /// successful operation on one of these proves the ceremony happened.
+    private static let authenticated: Set<CBUUID> = [
+        BLEIDs.command, BLEIDs.scan, BLEIDs.provision, BLEIDs.link, BLEIDs.token,
+    ]
+    /// Reads this transport has issued and not yet seen answered. A value for a
+    /// characteristic that is not in here arrived on its own.
+    private var pendingReads: Set<CBUUID> = []
+
+    /// macOS is holding keys for a panel that no longer has its half — the
+    /// state a factory reset leaves behind. It will not offer the code again
+    /// until the panel is forgotten in System Settings, and there is nothing
+    /// this process can do about it.
+    var onStalePairing: (() -> Void)?
+
+    private func noteSecured(_ id: CBUUID) {
+        guard BLETransport.authenticated.contains(id) else { return }
+        guard !secured else { return }
+        secured = true
+        endPairingRetries()
+        onSecured?()
+    }
 
     private func log(_ s: String) { onLog?(s) }
 
@@ -98,7 +135,11 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
 
     /// Reads one characteristic; the answer arrives on `onValue`.
     func read(_ id: CBUUID) {
-        guard let p = panel, let c = chars[id] else { return }
+        guard let p = panel, let c = chars[id] else {
+            log("read \(id.uuidString): no such characteristic")
+            return
+        }
+        pendingReads.insert(id)
         p.readValue(for: c)
     }
 
@@ -112,13 +153,18 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
     /// Provokes pairing without changing anything.
     ///
     /// A Read Request is acknowledged, so a rejection for insufficient
-    /// encryption comes back properly — and unlike the command write, its
-    /// success has no side effect on the panel. The state characteristic is
-    /// READ_ENC for exactly this.
+    /// authentication comes back properly — and unlike the command write, its
+    /// success has no side effect on the panel.
+    ///
+    /// The link characteristic, not the state one. State is READ_ENC and
+    /// notified: reading it succeeds on a Just Works link that authenticated
+    /// nobody, and its unsolicited notifications look exactly like a successful
+    /// read. Link is READ_AUTHEN and is never pushed, so a success on it means
+    /// the passkey was typed and nothing else does.
     func provokePairing() {
-        guard let p = panel, let s = stateChar else { return }
-        log("reading state to provoke pairing")
-        p.readValue(for: s)
+        guard chars[BLEIDs.link] != nil else { return }
+        log("reading the link to provoke pairing")
+        read(BLEIDs.link)
     }
 
     func send(_ body: [String: Any]) {
@@ -177,7 +223,15 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
 
     func centralManager(_ m: CBCentralManager, didDisconnectPeripheral p: CBPeripheral,
                         error: Error?) {
+        // A panel that was reset while this Mac kept its keys drops the link
+        // here rather than answering anything, so this is one of the two places
+        // the stale-bond case is visible at all.
+        if let e = error as NSError?, isStalePairing(e) {
+            log("this Mac is holding old keys for the panel")
+            onStalePairing?()
+        }
         panel = nil
+        pendingReads.removeAll()
         cmdChar = nil
         stateChar = nil
         secured = false
@@ -224,8 +278,7 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
                     error: Error?) {
         guard let e = error as NSError? else {
             log("write accepted")
-            if !secured { secured = true; onSecured?() }
-            endPairingRetries()
+            noteSecured(c.uuid)
             return
         }
         if e.domain == CBATTErrorDomain, let att = CBATTError.Code(rawValue: e.code) {
@@ -245,6 +298,10 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
 
     func peripheral(_ p: CBPeripheral, didUpdateValueFor c: CBCharacteristic,
                     error: Error?) {
+        // Whether this is an answer to something we asked for, or the panel
+        // talking on its own. The distinction is the whole fix: only the former
+        // is evidence of anything.
+        let solicited = pendingReads.remove(c.uuid) != nil
         if let e = error as NSError? {
             if e.domain == CBATTErrorDomain,
                let att = CBATTError.Code(rawValue: e.code),
@@ -254,14 +311,32 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
                 beginPairingRetries()
                 return
             }
+            if isStalePairing(e) {
+                log("this Mac is holding old keys for the panel")
+                onStalePairing?()
+                return
+            }
             log("read failed: \(e.localizedDescription)")
             onError?(e.localizedDescription)
             return
         }
-        if !secured { secured = true; onSecured?() }
-        endPairingRetries()
+        if solicited { noteSecured(c.uuid) }
         guard let d = c.value else { return }
         onValue?(c.uuid, d)
+    }
+
+    /// macOS kept its half of a bond the panel has since forgotten.
+    ///
+    /// Worth telling apart from every other failure, because it is the one the
+    /// user has to fix somewhere else: macOS will not offer the passkey dialog
+    /// again while it believes it already has keys, so retrying — which is what
+    /// this transport does with everything else — can only fail forever.
+    /// Deliberately narrow: an ATT insufficient-authentication is the ordinary
+    /// "please pair now" and is handled by provoking, not by sending anybody to
+    /// System Settings.
+    private func isStalePairing(_ e: NSError) -> Bool {
+        e.domain == CBErrorDomain
+            && e.code == CBError.peerRemovedPairingInformation.rawValue
     }
 
     private func setReady(_ v: Bool) {

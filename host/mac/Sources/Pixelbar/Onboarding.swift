@@ -57,6 +57,18 @@ final class Onboarding: ObservableObject {
         ble.onValue = { [weak self] id, data in
             Task { @MainActor in self?.deliver(id, data) }
         }
+        // The one failure nothing here can retry its way out of. macOS will not
+        // offer the passkey dialog again while it believes it already holds
+        // keys, so saying so — with the exact place to go — is the whole
+        // remedy.
+        ble.onStalePairing = { [weak self] in
+            Task { @MainActor in
+                self?.step = .failed(
+                    "this Mac still has old pairing keys for the panel. "
+                    + "Open System Settings → Bluetooth, forget Pixelbar, "
+                    + "then run setup again.")
+            }
+        }
     }
 
     private func deliver(_ id: CBUUID, _ data: Data) {
@@ -120,6 +132,10 @@ final class Onboarding: ObservableObject {
         }
 
         if !ble.secured, !(await awaitPairing()) {
+            // Unless something more specific already said why — the stale-key
+            // case in particular, which arrives on its own callback and is the
+            // difference between "type the code" and "you cannot, go here".
+            if case .failed = step { return nil }
             step = .failed("not paired")
             return nil
         }

@@ -83,6 +83,22 @@ static uint8_t s_addr_type;
 static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_state_handle;
 static uint16_t s_link_handle;
+// Whether the central asked for state notifications, and whether the link is
+// encrypted. Both have to be true before anything is pushed.
+//
+// ble_gatts_notify_custom sends regardless of either, which is what it is for
+// — and what made this wrong. The panel notified its state four times a second
+// down an unencrypted link to a central that had never subscribed, and those
+// unsolicited values were the first thing the Mac saw succeed. The helper read
+// that as "the link works, so it must be paired" and walked straight past the
+// passkey into a provisioning write that could only be refused.
+//
+// So: nothing leaves here until somebody has asked for it over a link that is
+// actually encrypted. That is also the correct posture on its own terms — the
+// state characteristic is READ_ENC, and notifying it in the clear handed out
+// exactly what the flag exists to protect.
+static bool s_state_subscribed;
+static bool s_encrypted;
 // What the connected host calls itself, and the token minted for it. Both are
 // per-connection: a name means nothing after the host has gone, and a token
 // minted once must not be minted again on a reconnect.
@@ -335,6 +351,8 @@ static int on_gap(struct ble_gap_event* ev, void* arg) {
       s_passkey = 0;
       s_peer_name[0] = '\0';
       s_conn_token[0] = '\0';
+      s_state_subscribed = false;
+      s_encrypted = false;
       ESP_LOGI(TAG, "disconnected (%d)", ev->disconnect.reason);
       advertise();
       return 0;
@@ -360,8 +378,24 @@ static int on_gap(struct ble_gap_event* ev, void* arg) {
       // either way: a failed attempt should not leave a number on display that
       // someone could still type.
       s_passkey = 0;
-      ESP_LOGI(TAG, "link security: %s",
-               ev->enc_change.status == 0 ? "established" : "refused");
+      s_encrypted = ev->enc_change.status == 0;
+      if (s_encrypted) {
+        ESP_LOGI(TAG, "link security: established");
+      } else {
+        // The status is worth printing rather than flattening to "refused".
+        // A host holding keys for a panel that has since been factory reset
+        // fails here and nowhere else, and it is indistinguishable from a
+        // mistyped code unless the number is shown.
+        ESP_LOGW(TAG, "link security: refused (%d) — if this host paired "
+                      "before a reset, forget the panel on it first",
+                 ev->enc_change.status);
+      }
+      return 0;
+
+    case BLE_GAP_EVENT_SUBSCRIBE:
+      if (ev->subscribe.attr_handle == s_state_handle) {
+        s_state_subscribed = ev->subscribe.cur_notify != 0;
+      }
       return 0;
 
     case BLE_GAP_EVENT_REPEAT_PAIRING:
@@ -508,6 +542,9 @@ void ble_forget_all(void) {
 
 void ble_publish(void) {
   if (s_conn == BLE_HS_CONN_HANDLE_NONE || s_state_handle == 0) return;
+  // See s_state_subscribed. Asked for, and encrypted — neither of which
+  // ble_gatts_notify_custom checks on its own.
+  if (!s_state_subscribed || !s_encrypted) return;
   char buf[440];
   const int n = net_state_json(buf, sizeof(buf));
   struct os_mbuf* om = ble_hs_mbuf_from_flat(buf, n);
