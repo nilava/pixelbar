@@ -814,6 +814,21 @@ class TestPorts : public Ports {
   ui::Ports::NetMode mode = ui::Ports::NetMode::Online;
   const char* text = "";
 
+  int paired_count() override { return pairs; }
+  const char* paired_name(int index) override {
+    return (index >= 0 && index < pairs) ? names[index] : "";
+  }
+  void begin_pairing() override { ++pair_calls; }
+  void forget_hosts() override { ++forget_host_calls; }
+  void forget_network() override { ++forget_net_calls; }
+
+  int pairs = 0;
+  const char* names[8] = {"MAC", "PHONE", "IPAD", "WORK",
+                          "PI",  "TAB",   "OLD",  "SPARE"};
+  int pair_calls = 0;
+  int forget_host_calls = 0;
+  int forget_net_calls = 0;
+
   RawInput raw;
   Settings stored;
   bool valid = false;
@@ -1155,6 +1170,23 @@ void test_app_adjust() {
         const ui::SettingDesc& d = grp.items[i];
         AppRig q;
         q.enter(grp.row.label, d.row.label);
+        if (d.kind == ui::SettingKind::Action) {
+          // An action either asks first or has already happened. Pairing is
+          // the one that just happens, and what it leaves behind is a home
+          // view rather than the menu it was started from.
+          const panel::Screen at = q.app.screen();
+          const bool asked = at == panel::Screen::Confirm;
+          CHECK(asked || q.app.depth() == 1);
+          if (!asked) continue;
+          // A confirm opens on no, and pressing it there does nothing but
+          // step back — which is the property that matters most here.
+          CHECK(!q.app.state().confirm_yes);
+          q.press();
+          q.settle();
+          CHECK_EQ(static_cast<int>(q.app.screen()),
+                   static_cast<int>(panel::Screen::Group));
+          continue;
+        }
         const panel::Screen want = d.kind == ui::SettingKind::Screen
                                        ? d.screen
                                        : panel::Screen::Setting;
@@ -1165,6 +1197,87 @@ void test_app_adjust() {
         CHECK_EQ(static_cast<int>(q.app.screen()), static_cast<int>(panel::Screen::Group));
       }
     }
+  }
+
+  CASE("a destructive action happens only after saying yes");
+  {
+    // The point of the confirm kind. Both halves are asserted, because a
+    // confirm that fires on no is worse than no confirm at all — it looks
+    // safe.
+    AppRig r;
+    r.enter("LINK", "CLR");
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::Confirm));
+    r.press();
+    r.settle();
+    CHECK_EQ(r.ports.forget_host_calls, 0);
+
+    r.enter("LINK", "CLR");
+    r.turn(1);
+    CHECK(r.app.state().confirm_yes);
+    r.press();
+    r.settle();
+    CHECK_EQ(r.ports.forget_host_calls, 1);
+    // And it does not fire twice: the pending action is consumed, not left
+    // armed for the next press.
+    r.press();
+    r.settle();
+    CHECK_EQ(r.ports.forget_host_calls, 1);
+  }
+
+  CASE("a confirm answers on any turn, not on a count of them");
+  {
+    AppRig r;
+    r.enter("NET", "FGET");
+    CHECK(!r.app.state().confirm_yes);
+    r.turn(3);   // a fast sweep is still one answer
+    CHECK(r.app.state().confirm_yes);
+    r.turn(-1);
+    CHECK(!r.app.state().confirm_yes);
+    r.press();
+    r.settle();
+    CHECK_EQ(r.ports.forget_net_calls, 0);
+  }
+
+  CASE("pairing opens a window and steps out of the menu");
+  {
+    AppRig r;
+    r.enter("LINK", "PAIR");
+    CHECK_EQ(r.ports.pair_calls, 1);
+    r.settle();
+    CHECK_EQ(r.app.depth(), 1);
+  }
+
+  CASE("the paired list survives an empty device and a full one");
+  {
+    // Zero is the state a device ships in, and eight is the most it can store.
+    // Both have been wrong in a list screen before: an empty one indexing
+    // past the end, a full one wrapping at the wrong length.
+    AppRig r;
+    r.ports.pairs = 0;
+    r.enter("LINK", "SEEN");
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::Paired));
+    CHECK_EQ(r.app.state().paired_count, 0);
+    r.turn(1);   // must not fall through to the home views behind it
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::Paired));
+    panel::Framebuffer fb;
+    r.render(fb);
+
+    AppRig f;
+    f.ports.pairs = 8;
+    f.enter("LINK", "SEEN");
+    CHECK_EQ(f.app.state().paired_count, 8);
+    for (int i = 0; i < 8; ++i) {
+      CHECK_EQ(f.app.state().paired_index, i);
+      CHECK(f.app.state().paired[i] != nullptr);
+      f.turn(1);
+      f.settle();
+    }
+    // All the way round and back to the first.
+    CHECK_EQ(f.app.state().paired_index, 0);
+    f.render(fb);
   }
 
   CASE("claiming a status from the menu shows the status, not the menu");

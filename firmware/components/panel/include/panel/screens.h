@@ -104,6 +104,8 @@ enum class Screen : uint8_t {
   OtaProgress,     // a firmware update is being written; do not unplug it
   Pairing,         // the six digits a Bluetooth host must be told
   Draw,            // whatever a host asked the panel to show
+  Paired,          // the hosts this panel has been paired with
+  Confirm,         // are you sure — a knob has no undo
   Count,
 };
 
@@ -185,6 +187,18 @@ struct UiState {
 
   // Which ambient pattern the Scene screen draws.
   uint8_t scene = 0;
+
+  // The paired hosts, and which one is under the cursor. Names come from the
+  // network component, so they are borrowed rather than owned — they outlive
+  // the frame and change only when something pairs or is forgotten.
+  const char* const* paired = nullptr;
+  int paired_count = 0;
+  int paired_index = 0;
+
+  // The confirm screen: what is about to happen, and which way the cursor is
+  // pointing. Defaulting to no is the whole point.
+  const char* confirm_label = "";
+  bool confirm_yes = false;
 
   // How far through a firmware update, 0..1, or negative when none is running.
   float ota = -1.0f;

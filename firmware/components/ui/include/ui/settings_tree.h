@@ -41,10 +41,28 @@ enum class SettingId : uint8_t {
   TouchLock,
   // Clock
   Clock24h,
+
+  // Actions. No stored value, so setting_get and setting_set ignore them —
+  // which the round-trip test has to know about, the same way it already skips
+  // the ones with screens of their own.
+  ActionPair,
+  ActionForgetHosts,
+  ActionForgetWifi,
   Count,
 };
 
 enum class SettingKind : uint8_t {
+  // Does something rather than holding a value.
+  //
+  // Everything in this tree used to end in a navigation or a field write, and
+  // setting_set had no side-effect hook — so "forget every paired host" had
+  // nowhere to live. The shortcut path was not the vehicle either: it already
+  // carries a hardcoded special case for the status picker and does not scale
+  // to several unrelated destinations.
+  //
+  // Anything destructive goes through Screen::Confirm first. A knob has no
+  // undo.
+  Action,
   // Hands off to a screen of its own, because the value deserves better than a
   // number: brightness and hue both have pickers that show you the thing
   // itself rather than a figure describing it.

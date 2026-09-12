@@ -29,6 +29,8 @@ constexpr RGB kScene(120, 200, 255);
 constexpr RGB kMotion(140, 60, 255);
 constexpr RGB kTouch(60, 220, 140);
 constexpr RGB kClock(200, 200, 255);
+constexpr RGB kNet(60, 200, 255);
+constexpr RGB kLink(120, 140, 255);
 
 #define ROW(icon, label, colour) {&panel::icon, label, colour, false}
 #define SPIN(icon, label, colour) {&panel::icon, label, colour, true}
@@ -97,6 +99,29 @@ const SettingDesc kClockItems[] = {
      panel::Screen::Count, 0, 1, 1, "", kHourNames, 2},
 };
 
+// Actions carry no range, no unit and no options: the last seven fields are
+// inert for them, and setting_get/setting_set ignore the ids entirely. The
+// round-trip test skips them for that reason, the way it already skips the
+// ones that open a screen.
+#define ACTION(icon, label, colour, id_)                                   \
+  {ROW(icon, label, colour), SettingId::id_, SettingKind::Action,           \
+   panel::Screen::Count, 0, 0, 0, "", nullptr, 0}
+
+const SettingDesc kNetItems[] = {
+    {ROW(kIconInfo, "ADDR", kNet), SettingId::Count, SettingKind::Screen,
+     panel::Screen::WifiInfo, 0, 0, 0, "", nullptr, 0},
+    // Forgetting the network is how a panel moves house, and the only way back
+    // in afterwards is the setup AP or Bluetooth — hence the confirm.
+    ACTION(kIconCross, "FGET", kNet, ActionForgetWifi),
+};
+
+const SettingDesc kLinkItems[] = {
+    ACTION(kIconDownload, "PAIR", kLink, ActionPair),
+    {ROW(kIconGrid, "SEEN", kLink), SettingId::Count, SettingKind::Screen,
+     panel::Screen::Paired, 0, 0, 0, "", nullptr, 0},
+    ACTION(kIconCross, "CLR", kLink, ActionForgetHosts),
+};
+
 #define GROUP(row_, items_) \
   {row_, items_, static_cast<uint8_t>(sizeof(items_) / sizeof(items_[0])), panel::Screen::Count}
 #define SHORTCUT(row_, screen_) {row_, nullptr, 0, screen_}
@@ -111,6 +136,8 @@ const SettingGroup kGroups[] = {
     GROUP(ROW(kIconMotion, "TILT", kMotion), kMotionItems),
     GROUP(ROW(kIconHand, "TAP", kTouch), kTouchItems),
     GROUP(SPIN(kIconGear, "CLCK", kClock), kClockItems),
+    GROUP(ROW(kIconDownload, "NET", kNet), kNetItems),
+    GROUP(ROW(kIconLock, "LINK", kLink), kLinkItems),
 };
 const int kGroupCount = static_cast<int>(sizeof(kGroups) / sizeof(kGroups[0]));
 
@@ -134,6 +161,11 @@ int setting_get(const Settings& s, SettingId id) {
     case SettingId::FlatSleeps: return s.flat_sleeps ? 1 : 0;
     case SettingId::TouchLock: return s.touch_locked ? 1 : 0;
     case SettingId::Clock24h: return s.clock_24h ? 1 : 0;
+    // Actions hold nothing. Reading one is not an error — the row renderer
+    // asks every descriptor for a value — it just has nothing to say.
+    case SettingId::ActionPair:
+    case SettingId::ActionForgetHosts:
+    case SettingId::ActionForgetWifi:
     case SettingId::Count: break;
   }
   return 0;
@@ -155,6 +187,9 @@ void setting_set(Settings& s, SettingId id, int v) {
     case SettingId::FlatSleeps: s.flat_sleeps = v != 0; break;
     case SettingId::TouchLock: s.touch_locked = v != 0; break;
     case SettingId::Clock24h: s.clock_24h = v != 0; break;
+    case SettingId::ActionPair:
+    case SettingId::ActionForgetHosts:
+    case SettingId::ActionForgetWifi:
     case SettingId::Count: break;
   }
   // Every write goes through the same clamp the loader uses, so a value that
@@ -167,6 +202,11 @@ const char* setting_text(const Settings& s, const SettingDesc& d, char* out,
   const int v = setting_get(s, d.id);
   if (d.options && v >= 0 && v < d.option_count) {
     snprintf(out, cap, "%s", d.options[v]);
+    return out;
+  }
+  // A screen or an action has no value to print; the row is the whole thing.
+  if (d.kind == SettingKind::Action) {
+    snprintf(out, cap, "%s", "");
     return out;
   }
   if (d.kind == SettingKind::Screen) {

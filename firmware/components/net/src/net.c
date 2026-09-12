@@ -1212,6 +1212,30 @@ uint32_t net_passkey(void) {
 }
 void net_mark_healthy(void) { ota_mark_healthy(); }
 
+int net_paired_count(void) { return auth_client_count(); }
+const char* net_paired_name(int i) { return auth_client_name(i); }
+
+void net_begin_pairing(void) { (void)auth_begin_pairing(); }
+
+void net_forget_hosts(void) {
+  // Both halves, because they are two halves of one idea. Revoking the tokens
+  // alone would leave a bonded host able to pair again with no code, and
+  // dropping the bonds alone would leave a token that still works over WiFi.
+  auth_revoke_all();
+  ble_forget_all();
+}
+
+void net_forget_network(void) {
+  creds_clear();
+  // A restart rather than a teardown: esp_wifi_stop mid-association leaves the
+  // driver, lwIP and the HTTP server in states this component has never had to
+  // reconcile, and the one thing this action must not do is leave a device
+  // that is neither on the network nor offering a way back onto one.
+  ESP_LOGW(TAG, "network forgotten: restarting into setup");
+  vTaskDelay(pdMS_TO_TICKS(250));
+  esp_restart();
+}
+
 bool net_connected(void) { return s_connected; }
 const char* net_ip(void) { return s_ip; }
 void net_publish(const net_status_t* s) {

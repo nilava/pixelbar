@@ -126,6 +126,26 @@ void net_publish_frame(const uint8_t* rgb, int count);
 // at startup would defeat the point of rollback entirely.
 void net_mark_healthy(void);
 
+// Who the panel is paired with, and the three things it can do about that.
+//
+// The list is the API clients rather than the Bluetooth bonds, and that is not
+// a shortcut: every path to a bond ends in a token — the Bluetooth onboarding
+// mints one over the authenticated link — so a host with a bond and no client
+// entry is a half-finished setup rather than something the panel should claim
+// to be paired with. Names are borrowed from the auth store and stay valid
+// until something pairs or is forgotten.
+int net_paired_count(void);
+const char* net_paired_name(int i);
+
+// Opens a pairing window, the same one the page's code flow uses.
+void net_begin_pairing(void);
+// Revokes every token and forgets every Bluetooth bond. The device stays on
+// the network; it is the hosts that have to come back.
+void net_forget_hosts(void);
+// Forgets the network and restarts into setup mode. Tokens survive: the people
+// who were allowed in are still allowed in once there is a way in.
+void net_forget_network(void);
+
 // True once there is an address. What the panel shows while there is not.
 bool net_connected(void);
 // Dotted quad, or an empty string. Valid once connected.

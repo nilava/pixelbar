@@ -50,6 +50,12 @@ class DevicePorts : public ui::Ports {
   bool take_draw(ui::DrawPayload* out) override;
   void set_passkey(uint32_t k) { passkey_ = k; }
 
+  int paired_count() override;
+  const char* paired_name(int index) override;
+  void begin_pairing() override;
+  void forget_hosts() override;
+  void forget_network() override;
+
   void set_net(ui::Ports::NetMode m, const char* text) {
     net_mode_ = m;
     net_text_ = text ? text : "";

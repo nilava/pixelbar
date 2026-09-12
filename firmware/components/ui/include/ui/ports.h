@@ -74,6 +74,25 @@ struct Ports {
   // say matters more than whatever you were looking at.
   virtual uint32_t passkey() { return 0; }
 
+  // Who this panel is paired with.
+  //
+  // Names are borrowed, not copied: on the device they point into the auth
+  // store, which changes only when something pairs or is forgotten, so they
+  // outlive any frame that draws them. The model re-reads the list when it
+  // opens the screen rather than holding it, for the same reason.
+  virtual int paired_count() { return 0; }
+  virtual const char* paired_name(int index) { return ""; }
+
+  // What the settings tree can *do* rather than set.
+  //
+  // All three are one-way: there is no value to read back, which is why they
+  // are a kind of their own rather than a toggle nobody can untoggle. The two
+  // destructive ones are reached only through a confirm screen — the panel has
+  // one knob and no undo.
+  virtual void begin_pairing() {}
+  virtual void forget_hosts() {}
+  virtual void forget_network() {}
+
   // Something a host asked the panel to show.
   //
   // Not carried on the command queue: that is four bytes and this has text in

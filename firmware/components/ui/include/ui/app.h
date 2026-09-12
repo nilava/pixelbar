@@ -166,6 +166,10 @@ class App {
   void refresh_setting(); // the value text and rail for the current setting
   void apply_settings();  // push the struct into the live UiState
   const SettingDesc* current_setting() const;
+  // An Action row was pressed: either do it, or ask first.
+  void begin_action(SettingId id);
+  void run_action(SettingId id);
+  void refresh_paired();   // pull the paired names across the seam
   int group_index_ = 0;
   int item_index_ = 0;
   // The rendered value, owned here so nothing downstream needs a static
@@ -195,6 +199,17 @@ class App {
   bool net_watching_ = false;
   Ports::NetMode net_mode_ = Ports::NetMode::Online;
   float net_info_s_ = 0.0f;
+
+  // What the confirm screen will do if you answer yes. SettingId::Count means
+  // nothing is pending, which is also what a cancelled confirm leaves behind.
+  SettingId pending_action_ = SettingId::Count;
+
+  // Borrowed name pointers for the paired list, re-read each time the screen
+  // opens. Eight because that is AUTH_MAX_CLIENTS and CONFIG_BT_NIMBLE_MAX_BONDS
+  // — a panel that claimed to show more than the device can store would be
+  // lying about the only thing this screen is for.
+  static constexpr int kMaxPaired = 8;
+  const char* paired_buf_[kMaxPaired] = {nullptr};
 
   int view_ = 0;  // index into kHomeViews
 

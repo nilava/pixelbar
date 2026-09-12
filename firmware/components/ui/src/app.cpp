@@ -487,7 +487,12 @@ void App::enter_menu_entry() {
 
   const SettingDesc* d = current_setting();
   if (!d) return;
+  if (d->kind == SettingKind::Action) {
+    begin_action(d->id);
+    return;
+  }
   if (d->kind == SettingKind::Screen) {
+    if (d->screen == Screen::Paired) refresh_paired();
     // Brightness and hue keep their own pickers: a value you are choosing by
     // eye deserves to be shown as the thing itself rather than as a number
     // describing it.
@@ -497,6 +502,60 @@ void App::enter_menu_entry() {
   }
   refresh_setting();
   push(Screen::Setting, TransitionKind::WipeUp);
+}
+
+// An action row was pressed.
+//
+// The two that destroy something go through a confirm; pairing does not,
+// because opening a pairing window is undone by walking away from it. This is
+// the whole reason Action exists as a kind: there was no hook in setting_set
+// where "forget every host" could have lived, and hanging it off the shortcut
+// path would have meant a second hardcoded screen special case.
+void App::begin_action(SettingId id) {
+  switch (id) {
+    case SettingId::ActionPair:
+      if (ports_) ports_->begin_pairing();
+      // Straight back out. The pairing screen belongs to the passkey, which
+      // arrives from the host a moment later and takes the panel on its own —
+      // showing an empty one here would be a screen with nothing on it.
+      go_home();
+      return;
+    case SettingId::ActionForgetHosts:
+      ui_.confirm_label = "HOST";
+      break;
+    case SettingId::ActionForgetWifi:
+      ui_.confirm_label = "WIFI";
+      break;
+    default:
+      return;
+  }
+  // Always starting at no. A confirm that opens on yes is a confirm you can
+  // answer by pressing twice without reading it.
+  ui_.confirm_yes = false;
+  pending_action_ = id;
+  push(Screen::Confirm, TransitionKind::WipeUp);
+}
+
+void App::run_action(SettingId id) {
+  if (!ports_) return;
+  switch (id) {
+    case SettingId::ActionForgetHosts: ports_->forget_hosts(); break;
+    case SettingId::ActionForgetWifi: ports_->forget_network(); break;
+    default: break;
+  }
+}
+
+void App::refresh_paired() {
+  int n = ports_ ? ports_->paired_count() : 0;
+  if (n < 0) n = 0;
+  if (n > kMaxPaired) n = kMaxPaired;
+  for (int i = 0; i < n; ++i) {
+    const char* name = ports_->paired_name(i);
+    paired_buf_[i] = (name && name[0]) ? name : "?";
+  }
+  ui_.paired = paired_buf_;
+  ui_.paired_count = n;
+  if (ui_.paired_index >= n) ui_.paired_index = 0;
 }
 
 // One phase of the focus cycle has run out. Work becomes rest, rest becomes the
@@ -716,6 +775,27 @@ void App::adjust(int detents, float rate) {
       break;
     }
 
+    case Screen::Paired: {
+      // Explicit rather than falling into the default, which moves through the
+      // home views: turning the knob inside a screen must never change what is
+      // behind it.
+      const int n = ui_.paired_count;
+      if (n <= 0) break;
+      const int next = wrap_index(ui_.paired_index + detents, n);
+      const TransitionKind k = detents > 0 ? TransitionKind::DiskUp : TransitionKind::DiskDown;
+      mgr_.restart_with(ui_, k, panel::transition_seconds(k));
+      ui_.paired_index = next;
+      break;
+    }
+
+    case Screen::Confirm: {
+      // Any turn flips the answer. A confirm has two states and no scale, so
+      // counting detents would only let a fast sweep land on yes by accident.
+      if (detents == 0) break;
+      ui_.confirm_yes = !ui_.confirm_yes;
+      break;
+    }
+
     case Screen::StatusPick: {
       const int n = static_cast<int>(Status::Count);
       const int next = wrap_index(static_cast<int>(ui_.pick) + detents, n);
@@ -837,6 +917,16 @@ void App::handle(const Event& e, double now_s) {
         }
         go_home();
         set_status(chosen);
+      } else if (screen() == Screen::Confirm) {
+        const SettingId pending = pending_action_;
+        pending_action_ = SettingId::Count;
+        const bool go = ui_.confirm_yes;
+        pop();
+        // After popping, so the panel is already showing the settings list it
+        // came from when the action takes effect — forget_network() restarts
+        // the radio and forget_hosts() drops the live Bluetooth link, and
+        // neither should happen with a half-finished transition on screen.
+        if (go) run_action(pending);
       } else if (depth_ > 1) {
         // Inside an adjuster, pressing accepts and goes back one level — to the
         // menu you came from, not onward to some unrelated setting.

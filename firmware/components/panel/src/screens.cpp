@@ -121,6 +121,8 @@ const char* screen_name(Screen s) {
     case Screen::OtaProgress: return "ota";
     case Screen::Pairing: return "pairing";
     case Screen::Draw: return "draw";
+    case Screen::Paired: return "paired";
+    case Screen::Confirm: return "confirm";
     default: return "?";
   }
 }
@@ -879,6 +881,52 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       }
 
       if (has_bar) draw_bar_aa(fb, 7, 7, ui.draw_bar, lit, ui.draw_tint.scaled(24));
+      break;
+    }
+
+    case Screen::Paired: {
+      // A list of names, one at a time, with ticks for position — the same
+      // shape as the settings list, because it is the same gesture.
+      if (ui.paired_count <= 0) {
+        mini_draw_text_centered(fb, 0, kWidth, 1, "NONE", RGB(120, 120, 120));
+        break;
+      }
+      int idx = ui.paired_index;
+      if (idx < 0 || idx >= ui.paired_count) idx = 0;
+      const RGB c = RGB(120, 200, 255);
+      draw_marquee(fb, a, ui.paired[idx], 0, kWidth, 1, c);
+      const int n = ui.paired_count;
+      for (int i = 0; i < n && i < kWidth; ++i) {
+        const int x = (i * kWidth) / n;
+        fb.set(x, 7, i == idx ? c : c.scaled(30));
+      }
+      break;
+    }
+
+    case Screen::Confirm: {
+      // What, and which way you are about to answer it.
+      //
+      // Two rows of text will not fit: the mini font is five tall and the
+      // panel is eight, so a question above an answer overlaps by two. The
+      // word says what, and a switch below it says which — a knob sliding
+      // right into red reads from across the room in a way a second word
+      // never would, and it is the same gesture the knob is making.
+      const RGB no = RGB(150, 150, 150);
+      const RGB yes = RGB(255, 60, 40);
+      mini_draw_text_centered(fb, 0, kWidth, 0, ui.confirm_label,
+                              ui.confirm_yes ? yes : no);
+      constexpr int kKnob = 6;
+      const int x = ui.confirm_yes ? kWidth - kKnob : 0;
+      for (int col = 0; col < kWidth; ++col) fb.set(col, 7, RGB(40, 40, 40));
+      // Breathing only on yes. At rest the thing about to be destroyed should
+      // not look like it is already happening.
+      const float k = ui.confirm_yes ? 0.75f + 0.25f * a.wave(1.4f) : 1.0f;
+      const RGB c = (ui.confirm_yes ? yes : no)
+                        .scaled(static_cast<uint8_t>(k * 255.0f + 0.5f));
+      for (int i = 0; i < kKnob; ++i) {
+        fb.set(x + i, 6, c);
+        fb.set(x + i, 7, c.scaled(120));
+      }
       break;
     }
 

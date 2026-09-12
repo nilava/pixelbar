@@ -317,4 +317,14 @@ bool DevicePorts::take_draw(ui::DrawPayload* out) {
 ui::Ports::NetMode DevicePorts::net_mode() { return net_mode_; }
 const char* DevicePorts::net_text() { return net_text_; }
 
+// Straight through to the network component. These run on the render loop, not
+// on the server's task, which is the one difference from every other path into
+// `net` — and the reason they are plain calls rather than queued commands is
+// that they do not touch the model at all.
+int DevicePorts::paired_count() { return net_paired_count(); }
+const char* DevicePorts::paired_name(int index) { return net_paired_name(index); }
+void DevicePorts::begin_pairing() { net_begin_pairing(); }
+void DevicePorts::forget_hosts() { net_forget_hosts(); }
+void DevicePorts::forget_network() { net_forget_network(); }
+
 }  // namespace board
