@@ -89,9 +89,9 @@ void App::begin(Ports& ports, double now_s) {
   // with every later change, so a field added to one and not the other shows
   // up as a setting that does nothing.
   apply_settings();
-  ui_.timer_total_s = set_.work_min * 60;
-  ui_.timer_left_s = ui_.timer_total_s;
-  ui_.timer_running = false;
+  // The whole timer, at the start of a set, so that cycle and phase agree with
+  // the length rather than being defaulted separately.
+  reset_timer();
 
   depth_ = 1;
   view_ = 0;
@@ -204,10 +204,7 @@ void App::update(float dt_s, double now_s) {
       timer_accum_s_ -= 1.0f;
       --ui_.timer_left_s;
     }
-    if (ui_.timer_left_s <= 0) {
-      ui_.timer_running = false;
-      fl_.done(ui_.accent, "DONE", now_s);
-    }
+    if (ui_.timer_left_s <= 0) end_timer_phase(now_s);
   }
 
   // Idle, and the sleep timeout.
@@ -347,10 +344,15 @@ void App::apply_settings() {
   ui_.accent = panel::accent_from_hue(set_.hue);
   ui_.scene = set_.scene;
   ui_.timer_set_min = set_.work_min;
+  ui_.timer_cycles = set_.cycles;
   // Retarget a timer that is not running, so the number you just dialled is
   // the number that runs. Conditional on the target having actually changed,
   // or adjusting the brightness would silently reset a paused countdown.
-  const int want = set_.work_min * 60;
+  //
+  // Whichever phase is on screen, not always the work one: dialling the rest
+  // length while resting should change the rest you are looking at, and using
+  // the work length here would have quietly replaced it.
+  const int want = (ui_.timer_resting ? set_.rest_min : set_.work_min) * 60;
   if (!ui_.timer_running && ui_.timer_total_s != want) {
     ui_.timer_total_s = want;
     ui_.timer_left_s = want;
@@ -424,6 +426,54 @@ void App::enter_menu_entry() {
   }
   refresh_setting();
   push(Screen::Setting, TransitionKind::WipeUp);
+}
+
+// One phase of the focus cycle has run out. Work becomes rest, rest becomes the
+// next round of work, and the last round of work ends the set.
+//
+// There is deliberately no rest after the final round: the set is over, and a
+// rest you are not going to come back from is just a second countdown between
+// you and being finished.
+void App::end_timer_phase(double now_s) {
+  timer_accum_s_ = 0.0f;
+
+  if (!ui_.timer_resting) {
+    if (ui_.timer_cycle >= ui_.timer_cycles) {
+      ui_.timer_running = false;
+      // The whole set. This is the moment the device exists for, so it takes
+      // the panel rather than sitting in a corner of it.
+      fl_.done(ui_.accent, "DONE", now_s);
+      return;
+    }
+    ui_.timer_resting = true;
+    ui_.timer_total_s = set_.rest_min * 60;
+  } else {
+    ui_.timer_resting = false;
+    ++ui_.timer_cycle;
+    ui_.timer_total_s = set_.work_min * 60;
+  }
+
+  ui_.timer_left_s = ui_.timer_total_s;
+  // A boundary is worth noticing but is not worth the whole panel: it is
+  // punctuation, not an ending. Toast has been implemented and tested since
+  // the flourish layer was written and called by nothing until now.
+  fl_.toast(ui_.timer_resting ? panel::RGB(60, 180, 255) : ui_.accent,
+            ui_.timer_resting ? "REST" : "WORK",
+            ui_.timer_resting ? &panel::kIconMoon : &panel::kIconHourglass, now_s);
+  // Carrying on by itself is a setting because both answers are reasonable:
+  // some people want the next round to start while they are still stretching,
+  // and some want to decide.
+  ui_.timer_running = set_.auto_next;
+}
+
+void App::reset_timer() {
+  ui_.timer_running = false;
+  ui_.timer_resting = false;
+  ui_.timer_cycle = 1;
+  ui_.timer_cycles = set_.cycles;
+  ui_.timer_total_s = set_.work_min * 60;
+  ui_.timer_left_s = ui_.timer_total_s;
+  timer_accum_s_ = 0.0f;
 }
 
 void App::set_status(Status s) {
@@ -645,10 +695,7 @@ void App::handle(const Event& e, double now_s) {
           set_status(Status::Call);
           break;
         case Zone::Middle:
-          ui_.timer_running = false;
-          ui_.timer_total_s = ui_.timer_set_min * 60;
-          ui_.timer_left_s = ui_.timer_total_s;
-          timer_accum_s_ = 0.0f;
+          reset_timer();
           break;
         case Zone::Right:
           set_status(ui_.status == Status::Dnd ? Status::Free : Status::Dnd);

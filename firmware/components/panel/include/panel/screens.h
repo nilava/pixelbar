@@ -97,6 +97,16 @@ struct UiState {
   int timer_total_s = 25 * 60;
   int timer_left_s = 25 * 60;
   bool timer_running = false;
+  // Which half of the cycle, and which round of the set.
+  //
+  // The settings for these — rest minutes, how many rounds, whether to carry
+  // on by itself — have been stored, sanitised and settable from the menu
+  // since the settings tree landed, and until now nothing read them: the
+  // timer counted work down once and stopped. A pomodoro that does not rest
+  // is a countdown.
+  bool timer_resting = false;
+  uint8_t timer_cycle = 1;   // 1-based, counts work rounds
+  uint8_t timer_cycles = 4;  // mirrored from Settings so the screen can draw it
 
   // Adjustable settings.
   uint8_t brightness = 48;

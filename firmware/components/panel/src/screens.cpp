@@ -441,7 +441,11 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
 
     case Screen::Timer: {
       const int left = ui.timer_left_s < 0 ? 0 : ui.timer_left_s;
-      RGB c = (left <= 60) ? RGB(255, 40, 20) : ui.accent;
+      // A rest is a different colour, not a different layout. The face is the
+      // thing you read across a room and it should not move about; what
+      // changes is whether the room is being told to work or to stop.
+      const RGB base = ui.timer_resting ? RGB(60, 180, 255) : ui.accent;
+      RGB c = (left <= 60) ? RGB(255, 40, 20) : base;
       // Under a minute the face pulses, and faster in the last ten seconds.
       if (left <= 60) {
         const float rate = (left <= 10) ? 0.5f : 1.0f;
@@ -462,7 +466,25 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       draw_bar_aa(fb, kHeight - 1, kHeight - 1, shown, c.scaled(120), RGB(0, 0, 0));
       // A brighter head on the bar, so progress reads even when it barely moves.
       fb.set_aa(shown * kWidth - 0.5f, kHeight - 1, c, 0.8f, Blend::Add);
-      if (!ui.timer_running && left > 0) draw_play_hint(fb, a, ui.accent);
+      if (!ui.timer_running && left > 0) draw_play_hint(fb, a, base);
+
+      // Which round of the set, as pips along the top row — the same idea as
+      // the menu's position ticks, and for the same reason: at this size a
+      // position you can see beats a number you have to read. Only drawn for a
+      // set of more than one, because "round 1 of 1" is not information.
+      //
+      // Row 0 because it is the only row this screen leaves entirely free. The
+      // first attempt put them down the left edge, where they sat on top of
+      // the play hint — measured, after a test caught them there.
+      if (ui.timer_cycles > 1) {
+        const int n = ui.timer_cycles > 8 ? 8 : ui.timer_cycles;
+        for (int i = 0; i < n; ++i) {
+          const bool past = (i + 1) < ui.timer_cycle;
+          const bool now_round = (i + 1) == ui.timer_cycle;
+          const RGB pip = now_round ? base : (past ? base.scaled(90) : base.scaled(25));
+          fb.set(i * 2, 0, pip);
+        }
+      }
       break;
     }
 

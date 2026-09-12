@@ -128,6 +128,11 @@ class App {
   // Shown, not navigated to: these are states the device is in. The nav stack
   // is reset to depth one so that a press or a turn leaves normally rather
   // than popping back into a screen the user never chose.
+  // The focus cycle: what happens when a phase runs out, and how the whole
+  // thing is put back to the start.
+  void end_timer_phase(double now_s);
+  void reset_timer();
+
   void show_net(panel::Screen s);
 
   // The settings tree. `group_index_` and `item_index_` are where you are in

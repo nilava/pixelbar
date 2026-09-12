@@ -491,6 +491,35 @@ static void test_screens() {
     }
   }
 
+  CASE("the round pips do not sit on top of the play hint");
+  {
+    // They did. The pips went down the left edge, which is exactly where the
+    // play arrow lives — caught by an existing test rather than by looking,
+    // and worth pinning directly now that both are on this screen.
+    UiState ui;
+    ui.timer_cycles = 4;
+    ui.timer_cycle = 2;
+    ui.timer_left_s = 900;
+    ui.timer_total_s = 1500;
+    ui.timer_running = false;   // so the play hint is drawn
+    Framebuffer fb;
+    draw_screen(fb, Screen::Timer, ui, 1000);
+
+    // The arrow occupies columns 0..2 of rows 1..5. Whatever the pips do, they
+    // must leave that alone.
+    int arrow = 0;
+    for (int y = 1; y <= 5; ++y)
+      for (int x = 0; x < 3; ++x)
+        if (fb.get(x, y).lit()) ++arrow;
+    CHECK(arrow > 0);
+
+    // And the pips must actually be somewhere: four of them, one per round.
+    int pips = 0;
+    for (int x = 0; x < kWidth; ++x)
+      if (fb.get(x, 0).lit()) ++pips;
+    CHECK_EQ(pips, 4);
+  }
+
   CASE("no two glyphs in the mini font are the same shape");
   {
     // A weaker guard than it looks, and worth saying so: R used to read as A

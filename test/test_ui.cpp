@@ -1407,16 +1407,28 @@ void test_app_menu() {
 
 
 void test_app_flourish() {
+  // A one-round, one-minute set: the whole thing ends at the first zero, which
+  // is what these three cases are about. Without trimming the rounds the first
+  // phase to run out is a *rest*, not the end — see test_timer_cycles.
+  auto one_minute_set = [](AppRig& r) {
+    r.enter("TIME", "SETS");
+    for (int i = 0; i < 20; ++i) r.turn(-1);   // cycles down to 1
+    r.settle();
+    r.app.handle(Event(EventType::DoublePress), 0.0);
+    r.settle();
+    r.enter("TIME", "TASK");
+    for (int i = 0; i < 40; ++i) r.turn(-1);   // work down to 1 minute
+    r.settle();
+    r.app.handle(Event(EventType::DoublePress), 0.0);
+    r.settle();
+  };
+
   CASE("the timer reaching zero takes the panel");
   {
     AppRig r;
-    // Dial the timer down to one minute so the test does not run for 25.
-    r.enter("TIME", "TASK");
-    for (int i = 0; i < 40; ++i) r.turn(-1);
-    r.settle();
+    one_minute_set(r);
     CHECK_EQ(r.app.state().timer_set_min, 1);
-    r.app.handle(Event(EventType::DoublePress), 0.0);
-    r.settle();
+    CHECK_EQ(static_cast<int>(r.app.state().timer_cycles), 1);
 
     r.tap(1);  // start it
     CHECK(r.app.state().timer_running);
@@ -1430,11 +1442,7 @@ void test_app_flourish() {
   CASE("and it clears itself without being touched");
   {
     AppRig r;
-    r.enter("TIME", "TASK");
-    for (int i = 0; i < 40; ++i) r.turn(-1);
-    r.settle();
-    r.app.handle(Event(EventType::DoublePress), 0.0);
-    r.settle();
+    one_minute_set(r);
     r.tap(1);
     r.run_until_timer_ends();
     CHECK_EQ(static_cast<int>(r.app.flourish()),
@@ -1448,11 +1456,7 @@ void test_app_flourish() {
   {
     // A moment you have to sit through is an obstacle, not a flourish.
     AppRig r;
-    r.enter("TIME", "TASK");
-    for (int i = 0; i < 40; ++i) r.turn(-1);
-    r.settle();
-    r.app.handle(Event(EventType::DoublePress), 0.0);
-    r.settle();
+    one_minute_set(r);
     r.tap(1);
     r.run_until_timer_ends();
     CHECK_EQ(static_cast<int>(r.app.flourish()),
@@ -1516,6 +1520,122 @@ void test_app_flourish() {
   }
 }
 
+
+void test_timer_cycles() {
+  // Dials a set down to one-minute phases so a whole pomodoro runs inside a
+  // test. Each turn is settled before the next: the adjuster multiplies the
+  // step once the measured turn rate is high, so a burst of twenty detents
+  // followed immediately by one more moves by five, not by one.
+  auto dial = [](AppRig& r, const char* item, int downs, int ups) {
+    r.enter("TIME", item);
+    for (int i = 0; i < downs; ++i) r.turn(-1);
+    r.settle();
+    for (int i = 0; i < ups; ++i) { r.turn(1); r.settle(); }
+    r.app.handle(Event(EventType::DoublePress), 0.0);
+    r.settle();
+  };
+  auto short_set = [&](AppRig& r, int rounds) {
+    dial(r, "SETS", 20, rounds - 1);   // cycles: floor is 1
+    dial(r, "REST", 80, 0);            // rest: floor is 1 minute
+    dial(r, "TASK", 40, 0);            // work: floor is 1 minute
+  };
+  // One phase, plus a second to cross the boundary. run_until_timer_ends is no
+  // use here: at a boundary the next phase is loaded in the same frame, so the
+  // countdown is never observed at zero and that helper would run through the
+  // whole set.
+  constexpr float kPhase = 61.0f;
+
+  CASE("work runs into a rest, and rest into the next round");
+  {
+    // The settings for this have existed since the settings tree landed and
+    // were read by nothing: the timer counted work down once and stopped.
+    AppRig r;
+    short_set(r, 2);
+    CHECK_EQ(static_cast<int>(r.app.state().timer_cycles), 2);
+    CHECK_EQ(static_cast<int>(r.app.state().timer_cycle), 1);
+    CHECK(!r.app.state().timer_resting);
+    CHECK_EQ(r.app.state().timer_total_s, 60);
+
+    r.tap(1);
+    CHECK(r.app.state().timer_running);
+    r.run(kPhase);
+    // The first zero is a boundary, not an ending.
+    CHECK(r.app.state().timer_resting);
+    CHECK_EQ(static_cast<int>(r.app.state().timer_cycle), 1);
+    CHECK(r.app.flourish() != panel::FlourishKind::Done);
+    CHECK(r.app.state().timer_running);   // auto_next defaults on
+
+    r.run(kPhase);
+    CHECK(!r.app.state().timer_resting);
+    CHECK_EQ(static_cast<int>(r.app.state().timer_cycle), 2);
+
+    // Stepped rather than run flat out, and stopped the moment the timer does.
+    // Each boundary costs about a second of drift, so three phases of kPhase
+    // overshoot the end by enough for the 1.6 s celebration to have expired
+    // before it is asserted on.
+    for (int i = 0; i < 200 && r.app.state().timer_running; ++i) r.run(0.5f);
+    // The last round ends the set, and there is no rest after it — a rest you
+    // are not coming back from is a countdown between you and being finished.
+    CHECK(!r.app.state().timer_running);
+    CHECK(!r.app.state().timer_resting);
+    CHECK_EQ(static_cast<int>(r.app.flourish()),
+             static_cast<int>(panel::FlourishKind::Done));
+  }
+
+  CASE("with auto-continue off it waits at the boundary");
+  {
+    AppRig r;
+    short_set(r, 2);
+    r.enter("TIME", "AUTO");
+    r.turn(1);
+    r.settle();
+    CHECK(!r.app.settings().auto_next);
+    r.app.handle(Event(EventType::DoublePress), 0.0);
+    r.settle();
+
+    r.tap(1);
+    r.run(kPhase);
+    CHECK(r.app.state().timer_resting);
+    CHECK(!r.app.state().timer_running);   // holding the rest, waiting
+    r.tap(1);
+    CHECK(r.app.state().timer_running);
+  }
+
+  CASE("resetting puts the whole set back, not just the phase");
+  {
+    AppRig r;
+    short_set(r, 2);
+    r.tap(1);
+    r.run(kPhase);
+    CHECK(r.app.state().timer_resting);
+
+    r.hold(1);   // middle zone, hold
+    r.settle();
+    CHECK(!r.app.state().timer_resting);
+    CHECK_EQ(static_cast<int>(r.app.state().timer_cycle), 1);
+    CHECK(!r.app.state().timer_running);
+    CHECK_EQ(r.app.state().timer_left_s, r.app.state().timer_total_s);
+  }
+
+  CASE("dialling the rest length while resting changes the rest on screen");
+  {
+    // apply_settings retargeted from work_min whatever the phase, so changing
+    // any setting while resting would have replaced the rest with a work run.
+    AppRig r;
+    short_set(r, 2);
+    r.tap(1);
+    r.run(kPhase);
+    CHECK(r.app.state().timer_resting);
+    r.tap(1);                              // pause, so a retarget is allowed
+    CHECK(!r.app.state().timer_running);
+
+    r.enter("TIME", "REST");
+    r.turn(1);
+    r.settle();
+    CHECK_EQ(r.app.state().timer_total_s,
+             static_cast<int>(r.app.settings().rest_min) * 60);
+  }
+}
 
 void test_settings_tree() {
   CASE("every label fits the box it is drawn in");
@@ -1821,6 +1941,7 @@ void run_ui_tests() {
   test_app_adjust();
   test_app_flourish();
   test_app_sleep_and_settings();
+  test_timer_cycles();
   test_settings_tree();
   test_net_screens();
   test_clock_validity();
