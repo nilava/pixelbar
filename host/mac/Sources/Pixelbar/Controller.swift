@@ -127,6 +127,12 @@ final class Controller: ObservableObject {
         ble.onError = { [weak self] m in
             Task { @MainActor in self?.bleLog = m }
         }
+        ble.onSecured = { [weak self] in
+            Task { @MainActor in
+                self?.blePairingWanted = false
+                self?.objectWillChange.send()
+            }
+        }
         Task { await poll() }
     }
 

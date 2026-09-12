@@ -51,6 +51,12 @@
   <p class="hint">Changing anything needs a token. Press this, read the six
     digits off the panel, and type them in \u2014 the token is then kept in this
     browser. Reading the panel's state never needs one.</p>
+  <dl id="clients" style="margin-top:12px"></dl>
+  <div class="row" style="margin-top:8px">
+    <button id="revokeall" style="flex:0 0 auto;padding:10px 12px;font-size:13px">
+      Forget every paired client
+    </button>
+  </div>
 </div>
 
 <div class="card" id="wifi">
@@ -271,7 +277,12 @@ async function pair() {
   const code = prompt("Six digits, from the panel:");
   if (!code) return;
   try {
-    const r = await fetch("/api/pair", {method: "POST", body: JSON.stringify({code: +code})});
+    // A name, so this browser is identifiable in the paired list rather than
+    // being one of several indistinguishable entries.
+    const who = navigator.platform || "browser";
+    const r = await fetch("/api/pair", {
+      method: "POST", body: JSON.stringify({code: +code, name: who})
+    });
     const j = await r.json();
     if (j.token) {
       token = j.token;
@@ -302,6 +313,50 @@ document.querySelectorAll("[data-presshold]").forEach(b =>
   b.onclick = () => send({presshold: 1}));
 
 $("pair").onclick = () => pair();
+
+// Who has access. Names and dates only — the panel never returns a token, so
+// this list cannot be used to acquire one.
+async function pollClients() {
+  try {
+    const r = await (await fetch("/api/clients")).json();
+    const dl = $("clients");
+    dl.textContent = "";
+    if (!r.clients.length) {
+      const dt = document.createElement("dt");
+      dt.textContent = "Nothing paired yet";
+      dl.appendChild(dt);
+    }
+    for (const c of r.clients) {
+      const dt = document.createElement("dt");
+      dt.textContent = c.name;
+      const dd = document.createElement("dd");
+      const b = document.createElement("button");
+      b.textContent = "Forget";
+      b.style.cssText = "padding:4px 8px;font-size:12px";
+      b.onclick = async () => {
+        if (!confirm("Forget " + c.name + "?")) return;
+        await fetch("/api/clients?id=" + c.id,
+                    {method: "DELETE", headers: authHeaders()}).catch(()=>{});
+        pollClients();
+      };
+      dd.appendChild(b);
+      dl.appendChild(dt);
+      dl.appendChild(dd);
+    }
+    const head = document.querySelector("#clients").parentElement.querySelector("h2");
+    if (head) head.textContent = "Pairing \u00b7 " + r.clients.length + " of " + r.max;
+  } catch {}
+}
+pollClients();
+setInterval(pollClients, 5000);
+
+$("revokeall").onclick = async () => {
+  if (!confirm("Forget every paired client, including this browser?")) return;
+  await fetch("/api/clients", {method: "DELETE", headers: authHeaders()}).catch(()=>{});
+  token = "";
+  localStorage.removeItem("pixelbarToken");
+  pollClients();
+};
 
 const row = document.getElementById("statuses");
 STATUSES.forEach((name, i) => {

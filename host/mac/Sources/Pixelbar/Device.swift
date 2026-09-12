@@ -108,7 +108,11 @@ actor Device {
         guard let u = url("/api/pair") else { return nil }
         var req = URLRequest(url: u)
         req.httpMethod = "POST"
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["code": code])
+        // The Mac's own name, so it is identifiable in the panel's paired
+        // list rather than sitting there as an anonymous entry.
+        let who = Host.current().localizedName ?? "Mac"
+        req.httpBody = try? JSONSerialization.data(
+            withJSONObject: ["code": code, "name": who])
         guard let (data, _) = try? await session.data(for: req),
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let t = j["token"] as? String else { return nil }

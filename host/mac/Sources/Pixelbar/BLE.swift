@@ -36,6 +36,9 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
     var onError: ((String) -> Void)?
     /// A characteristic answered with a value.
     var onValue: ((CBUUID, Data) -> Void)?
+    /// The link came up secured — which is the only signal that pairing
+    /// actually completed, because CoreBluetooth has no such callback.
+    var onSecured: (() -> Void)?
     /// True once an operation has actually been accepted, which is the only
     /// evidence the link is encrypted and authenticated. `ready` means only
     /// that the characteristic was found, and finding one requires no security.
@@ -48,6 +51,43 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
         // Its own queue: CoreBluetooth callbacks should not land on the main
         // thread, where the menu is being rebuilt.
         central = CBCentralManager(delegate: self, queue: DispatchQueue(label: "pixelbar.ble"))
+    }
+
+    /// Keep asking until the link comes up, or give up after a minute.
+    ///
+    /// CoreBluetooth exposes no "pairing finished" callback and no link-security
+    /// property: the only way to learn that the passkey was accepted is to try
+    /// the operation again and see it succeed. Without this the helper sat at
+    /// "not paired" after a perfectly good pairing, until something else
+    /// happened to touch the link — which is exactly the "stuck in some state,
+    /// then eventually paired" that was reported.
+    private var retryTimer: DispatchSourceTimer?
+
+    private func beginPairingRetries() {
+        guard retryTimer == nil else { return }
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "pixelbar.ble.retry"))
+        // Every two seconds: slower than a person can type six digits, faster
+        // than they will wonder whether it worked.
+        t.schedule(deadline: .now() + 2, repeating: 2)
+        var left = 30
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            if self.secured || left <= 0 {
+                self.endPairingRetries()
+                if self.secured { self.log("paired") }
+                else { self.log("pairing timed out") }
+                return
+            }
+            left -= 1
+            self.provokePairing()
+        }
+        retryTimer = t
+        t.resume()
+    }
+
+    private func endPairingRetries() {
+        retryTimer?.cancel()
+        retryTimer = nil
     }
 
     /// Provokes pairing without changing anything.
@@ -122,6 +162,7 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
         cmdChar = nil
         stateChar = nil
         secured = false
+        endPairingRetries()
         setReady(false)
         // Straight back to looking. A panel that was unplugged and plugged in
         // again should be picked up without anyone being told about it.
@@ -161,17 +202,16 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
                     error: Error?) {
         guard let e = error as NSError? else {
             log("write accepted")
-            secured = true
+            if !secured { secured = true; onSecured?() }
+            endPairingRetries()
             return
         }
         if e.domain == CBATTErrorDomain, let att = CBATTError.Code(rawValue: e.code) {
             switch att {
             case .insufficientAuthentication, .insufficientEncryption:
-                // Expected once, on the write that provokes pairing: the system
-                // puts its dialog up and the operation is retried after the
-                // link comes up secured.
                 log("needs pairing — the panel is showing a code")
                 onNeedsPairing?()
+                beginPairingRetries()
                 return
             default:
                 break
@@ -189,13 +229,15 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
                att == .insufficientAuthentication || att == .insufficientEncryption {
                 log("needs pairing — the panel is showing a code")
                 onNeedsPairing?()
+                beginPairingRetries()
                 return
             }
             log("read failed: \(e.localizedDescription)")
             onError?(e.localizedDescription)
             return
         }
-        secured = true
+        if !secured { secured = true; onSecured?() }
+        endPairingRetries()
         guard let d = c.value else { return }
         onValue?(c.uuid, d)
     }

@@ -146,7 +146,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bt.isEnabled = controller.bluetoothReady && !controller.bluetoothUsable
         menu.addItem(bt)
 
-        if !controller.bleLog.isEmpty {
+        if controller.blePairingWanted && !controller.bluetoothUsable {
+            let p = NSMenuItem(title: "Type the code on the panel…", action: nil,
+                               keyEquivalent: "")
+            p.isEnabled = false
+            menu.addItem(p)
+        } else if !controller.bleLog.isEmpty {
             let l = NSMenuItem(title: "Bluetooth: \(controller.bleLog)", action: nil,
                                keyEquivalent: "")
             l.isEnabled = false
@@ -249,28 +254,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func pairBluetooth() {
         Task {
-            controller.blePairingWanted = false
-            await controller.pair()
-            // Wait for the device to actually refuse us before claiming a code
-            // is on screen. The old version said so unconditionally, which was
-            // reassuring and wrong: the operation it fired was unacknowledged
-            // and nothing ever came back.
-            for _ in 0..<20 {
-                if controller.blePairingWanted || controller.bluetoothUsable { break }
-                try? await Task.sleep(for: .milliseconds(250))
-            }
             if controller.bluetoothUsable {
                 note("Already paired over Bluetooth.")
-            } else if controller.blePairingWanted {
-                note("The panel is showing a six-digit code. macOS will ask for "
-                     + "it — type what the panel shows.\n\nThe code exists "
-                     + "nowhere else, so a host that can produce it is a host in "
-                     + "the room.")
-            } else {
+                return
+            }
+            controller.blePairingWanted = false
+            await controller.pair()
+
+            // Deliberately not a modal.
+            //
+            // This used to put up a blocking alert the moment the device
+            // refused us — while macOS was trying to show its own passkey
+            // dialog for the same event. Two dialogs competing, one of them
+            // holding the main thread in runModal(), is what made pairing
+            // "error before I could enter the code". The system dialog is the
+            // one that matters; this stays out of its way and reports the
+            // outcome in the menu, which the transport now actually knows
+            // because it retries until the link comes up.
+            rebuildMenu()
+
+            for _ in 0..<40 {
+                if controller.bluetoothUsable { break }
+                try? await Task.sleep(for: .milliseconds(500))
+                rebuildMenu()
+            }
+            rebuildMenu()
+            if !controller.bluetoothUsable && !controller.blePairingWanted {
                 note("The panel did not answer over Bluetooth."
                      + (controller.bleLog.isEmpty ? "" : "\n\n\(controller.bleLog)"))
             }
-            rebuildMenu()
         }
     }
 
@@ -322,7 +334,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         a.runModal()
     }
-
     @objc private func showHostPrompt() {
         let a = NSAlert()
         a.messageText = "Panel address"

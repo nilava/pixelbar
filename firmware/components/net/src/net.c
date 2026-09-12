@@ -478,11 +478,22 @@ static esp_err_t post_pair_begin(httpd_req_t* r) {
 }
 
 static esp_err_t post_pair(httpd_req_t* r) {
-  char body[96];
+  char body[160];
   if (!body_of(r, body, sizeof(body))) return httpd_resp_send_500(r);
+  if (auth_full()) {
+    httpd_resp_set_status(r, "409 Conflict");
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(
+        r, "{\"error\":\"no room; forget a paired client first\"}");
+  }
   int code = 0;
+  char name[20] = {0};
+  // Optional, and defaulted rather than required: a client that does not say
+  // who it is still gets a token, it just appears in the list as "host".
+  str_field(body, "\"name\"", name, sizeof(name));
   const char* token = NULL;
-  if (!field(body, "\"code\"", &code) || !auth_redeem((uint32_t)code, &token)) {
+  if (!field(body, "\"code\"", &code) ||
+      !auth_redeem((uint32_t)code, name, &token)) {
     httpd_resp_set_status(r, "403 Forbidden");
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, "{\"error\":\"wrong or expired code\"}");
@@ -624,6 +635,72 @@ static esp_err_t delete_draw(httpd_req_t* r) {
   return httpd_resp_sendstr(r, "{\"cleared\":true}");
 }
 
+// Escapes a string into a JSON value. An SSID is 32 arbitrary octets and is
+// chosen by someone else, so it can perfectly well contain a quote or a
+// backslash — and emitting it raw would produce a broken document that the
+// page fails to parse, for a network that is otherwise fine.
+static void json_escape(const char* in, char* out, size_t cap) {
+  size_t n = 0;
+  for (const unsigned char* p = (const unsigned char*)in; *p && n + 7 < cap; ++p) {
+    if (*p == '"' || *p == '\\') {
+      out[n++] = '\\';
+      out[n++] = (char)*p;
+    } else if (*p < 0x20) {
+      n += snprintf(out + n, cap - n, "\\u%04x", *p);
+    } else {
+      out[n++] = (char)*p;
+    }
+  }
+  out[n] = '\0';
+}
+
+// Who has access, and taking it away.
+//
+// Names and dates, never tokens: a list of who can get in must not itself be
+// a way to get in.
+static esp_err_t get_clients(httpd_req_t* r) {
+  char buf[512];
+  int n = snprintf(buf, sizeof(buf), "{\"max\":%d,\"clients\":[", auth_client_max());
+  for (int i = 0; i < auth_client_count(); ++i) {
+    char name[64];
+    json_escape(auth_client_name(i), name, sizeof(name));
+    const int need = snprintf(NULL, 0, "%s{\"id\":%d,\"name\":\"%s\",\"issued\":%lu}",
+                              i ? "," : "", i, name,
+                              (unsigned long)auth_client_issued(i));
+    if (n + need + 4 > (int)sizeof(buf)) break;
+    n += snprintf(buf + n, sizeof(buf) - n,
+                  "%s{\"id\":%d,\"name\":\"%s\",\"issued\":%lu}", i ? "," : "", i,
+                  name, (unsigned long)auth_client_issued(i));
+  }
+  n += snprintf(buf + n, sizeof(buf) - n, "]}");
+  httpd_resp_set_type(r, "application/json");
+  return httpd_resp_send(r, buf, n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1);
+}
+
+static esp_err_t delete_client(httpd_req_t* r) {
+  if (!allowed(r)) return refuse(r);
+  char q[48] = {0};
+  int id = -1;
+  if (httpd_req_get_url_query_str(r, q, sizeof(q)) == ESP_OK) {
+    char v[8] = {0};
+    if (httpd_query_key_value(q, "id", v, sizeof(v)) == ESP_OK) id = atoi(v);
+  }
+  // No id means all of them — which includes whoever is asking. That is the
+  // point: it is the reset for a device being given away.
+  if (id < 0) {
+    auth_revoke_all();
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, "{\"revoked\":\"all\"}");
+  }
+  if (!auth_revoke(id)) {
+    httpd_resp_set_status(r, "404 Not Found");
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, "{\"error\":\"no such client\"}");
+  }
+  httpd_resp_set_type(r, "application/json");
+  return httpd_resp_sendstr(r, "{\"revoked\":true}");
+}
+
 // The command vocabulary, independent of how it arrived.
 //
 // Extracted so that a write over Bluetooth and a POST over WiFi are the same
@@ -657,24 +734,6 @@ static esp_err_t post_input(httpd_req_t* r) {
 // parser as field(), for the same reason: one JSON object of three keys does
 // not justify linking cJSON, and everything here is length-checked.
 
-// Escapes a string into a JSON value. An SSID is 32 arbitrary octets and is
-// chosen by someone else, so it can perfectly well contain a quote or a
-// backslash — and emitting it raw would produce a broken document that the
-// page fails to parse, for a network that is otherwise fine.
-static void json_escape(const char* in, char* out, size_t cap) {
-  size_t n = 0;
-  for (const unsigned char* p = (const unsigned char*)in; *p && n + 7 < cap; ++p) {
-    if (*p == '"' || *p == '\\') {
-      out[n++] = '\\';
-      out[n++] = (char)*p;
-    } else if (*p < 0x20) {
-      n += snprintf(out + n, cap - n, "\\u%04x", *p);
-    } else {
-      out[n++] = (char)*p;
-    }
-  }
-  out[n] = '\0';
-}
 
 static esp_err_t get_wifi_scan(httpd_req_t* r) {
   // Blocking, on the server's own task. That is allowed here and not in the
@@ -831,6 +890,8 @@ static esp_err_t start_server(void) {
   const httpd_uri_t screen = {"/api/screen", HTTP_GET, get_screen, NULL};
   const httpd_uri_t pbegin = {"/api/pair/begin", HTTP_POST, post_pair_begin, NULL};
   const httpd_uri_t pair = {"/api/pair", HTTP_POST, post_pair, NULL};
+  const httpd_uri_t clients = {"/api/clients", HTTP_GET, get_clients, NULL};
+  const httpd_uri_t unclient = {"/api/clients", HTTP_DELETE, delete_client, NULL};
   const httpd_uri_t draw = {"/api/display/draw", HTTP_POST, post_draw, NULL};
   const httpd_uri_t undraw = {"/api/display/draw", HTTP_DELETE, delete_draw, NULL};
   httpd_register_uri_handler(s_server, &root);
@@ -844,6 +905,8 @@ static esp_err_t start_server(void) {
   httpd_register_uri_handler(s_server, &screen);
   httpd_register_uri_handler(s_server, &pbegin);
   httpd_register_uri_handler(s_server, &pair);
+  httpd_register_uri_handler(s_server, &clients);
+  httpd_register_uri_handler(s_server, &unclient);
   httpd_register_uri_handler(s_server, &draw);
   httpd_register_uri_handler(s_server, &undraw);
   // The captive-portal half that DNS cannot do. Harmless in station mode: a
