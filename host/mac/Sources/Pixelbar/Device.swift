@@ -54,11 +54,12 @@ actor Device {
 
     /// True when the last write was refused for want of a token, so the menu
     /// can offer pairing rather than silently doing nothing.
-    private(set) var needsPairing = false
+    private(set) var needsPairing: Bool
 
     init(host: String, token: String) {
         self.host = host
         self.token = token
+        self.needsPairing = token.isEmpty
         let cfg = URLSessionConfiguration.ephemeral
         // Short, and deliberately so. This runs on a LAN; anything that takes
         // longer than two seconds is a device that is off, not a slow one, and

@@ -104,6 +104,18 @@ function on the device — two transports that disagreed slightly about what a
 command meant would be a bug nobody finds until the day one of them is all
 there is.
 
+## Setting it up
+
+The menu shows **Set up Pixelbar…** and nothing else until it is paired. Not
+greyed-out options with no explanation — one obvious next step, and a first line
+that says which part is missing: no panel found, not paired, or paired but
+unreachable. Three different problems with three different remedies.
+
+Setup finds the panel, asks it to show a six-digit code, and takes that code in
+exchange for a token. Until that is done the helper sends nothing, so an
+unpaired helper is idle rather than silently failing every time a microphone
+opens.
+
 ## Bluetooth pairing
 
 **The panel shows a six-digit code and macOS asks you to type it.**

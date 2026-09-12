@@ -1047,13 +1047,22 @@ void test_app_status() {
     CHECK_EQ(static_cast<int>(r.app.state().status), static_cast<int>(panel::Status::Free));
   }
 
-  CASE("a status change never leaves the panel on the wrong screen");
+  CASE("a status change brings the status view with it");
   {
+    // This used to assert the opposite — that changing a status from the clock
+    // left you on the clock — on the reasoning that the panel had not moved
+    // you anywhere, only one fact about it had changed.
+    //
+    // That reasoning was about the person holding the device, and the audience
+    // is the room. A status animating over a clock face leaves the room
+    // looking at a clock, which is the one thing it certainly does not need to
+    // be told. Reversed deliberately.
     AppRig r;
     r.tap(2); r.settle();  // go to the clock
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Clock));
     r.tap(0); r.settle();  // change status from there
     CHECK_EQ(static_cast<int>(r.app.state().status), static_cast<int>(panel::Status::Busy));
-    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Clock));
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
   }
 }
 
@@ -1170,6 +1179,37 @@ void test_app_adjust() {
     r.settle();
     CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
     CHECK_EQ(r.app.depth(), 1);
+  }
+
+  CASE("a status arriving from elsewhere brings the status view with it");
+  {
+    // The room is the audience. A status change that animates over the clock
+    // leaves the room looking at a clock.
+    AppRig r;
+    r.turn(1);
+    r.settle();
+    CHECK(r.app.screen() != panel::Screen::Status);
+
+    r.app.set_status_external(static_cast<int>(panel::Status::Busy));
+    r.settle();
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Status));
+    CHECK_EQ(static_cast<int>(r.app.state().status), static_cast<int>(panel::Status::Busy));
+  }
+
+  CASE("but it does not drag you out of the menu to do it");
+  {
+    // A microphone opening mid-settings should not lose your place. The status
+    // is correct either way, and you will see it when you come out.
+    AppRig r;
+    r.enter("DISP", "DIM");
+    const int depth = r.app.depth();
+    CHECK(depth > 1);
+
+    r.app.set_status_external(static_cast<int>(panel::Status::Call));
+    r.settle();
+    CHECK_EQ(r.app.depth(), depth);
+    CHECK_EQ(static_cast<int>(r.app.screen()), static_cast<int>(panel::Screen::Brightness));
+    CHECK_EQ(static_cast<int>(r.app.state().status), static_cast<int>(panel::Status::Call));
   }
 
   CASE("and it shows the status even if you were looking at something else");

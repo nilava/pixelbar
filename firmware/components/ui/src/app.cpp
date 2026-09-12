@@ -549,8 +549,35 @@ void App::reset_timer() {
 
 void App::set_status(Status s) {
   if (ui_.status == s) return;
-  // A status change is the event this device exists for, so it takes the whole
-  // panel wherever you happen to be standing.
+
+  // Show the status, not whatever else was up.
+  //
+  // The point of the device is that the room can see your status. A change
+  // that plays its animation over the clock leaves the room looking at a
+  // clock, which is the one thing it certainly does not need to be told.
+  //
+  // Only from a home view, though. Being yanked out of a settings screen
+  // because a microphone opened would be worse than the second or two it
+  // takes to come back out and see it — the status is still correct either
+  // way, and the menu is somewhere you are deliberately standing.
+  if (depth_ == 1 && !booting_) {
+    for (int i = 0; i < kHomeViewCount; ++i) {
+      if (kHomeViews[i] == Screen::Status) {
+        view_ = i;
+        break;
+      }
+    }
+    if (mgr_.current() != Screen::Status) {
+      nav_[0] = NavFrame{Screen::Status, TransitionKind::None};
+      mgr_.go_to(Screen::Status, ui_, TransitionKind::Ignite,
+                 panel::transition_seconds(TransitionKind::Ignite));
+      ui_.status = s;
+      return;
+    }
+  }
+
+  // Already there: the change is an event on this screen rather than a move to
+  // it, so it restarts in place.
   mgr_.restart_with(ui_, TransitionKind::Ignite,
                     panel::transition_seconds(TransitionKind::Ignite));
   ui_.status = s;

@@ -52,20 +52,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func rebuildMenu() {
         let menu = NSMenu()
+        let ready = controller.isReady
 
-        let state: String
-        if searching {
-            state = "Looking for the panel…"
-        } else if controller.paused {
-            state = "Paused"
-        } else if let p = controller.pushed {
-            state = "Showing \(p.label)"
-        } else if controller.anyLink {
-            state = "Watching"
-        } else {
-            state = "Panel unreachable"
+        // The first line always says what is true, and when something is
+        // missing it says which thing. A menu that greys everything out
+        // without explaining is indistinguishable from one that is broken.
+        let headline: String
+        if searching { headline = "Looking for the panel…" }
+        else if !ready { headline = controller.setup.summary }
+        else if controller.paused { headline = "Paused" }
+        else if let p = controller.pushed { headline = "Showing \(p.label)" }
+        else { headline = "Watching" }
+        let head = NSMenuItem(title: headline, action: nil, keyEquivalent: "")
+        head.isEnabled = false
+        menu.addItem(head)
+
+        if !ready {
+            // One obvious next step, rather than a menu of things that will
+            // all fail. Setup runs find-then-pair in order and stops at
+            // whichever part is missing.
+            menu.addItem(.separator())
+            let go = NSMenuItem(title: "Set up Pixelbar…", action: #selector(runSetup),
+                                keyEquivalent: "")
+            go.target = self
+            menu.addItem(go)
+            menu.addItem(.separator())
+            let quit = NSMenuItem(title: "Quit",
+                                  action: #selector(NSApplication.terminate(_:)),
+                                  keyEquivalent: "q")
+            menu.addItem(quit)
+            item.menu = menu
+            item.button?.image = NSImage(systemSymbolName: "rectangle.dashed",
+                                         accessibilityDescription: "Pixelbar — not set up")
+            return
         }
-        menu.addItem(withTitle: state, action: nil, keyEquivalent: "")
 
         let detail = "Mic \(controller.micOn ? "on" : "off") · Camera "
             + "\(controller.camOn ? "on" : "off") · \(controller.link.rawValue)"
@@ -105,9 +125,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(.separator())
 
-        // Setting a status by hand is the thing you want when the automatic
-        // rules are not the whole story — stepping out, or a lunch nobody's
-        // microphone knows about.
         let sub = NSMenu()
         for s in Status.allCases {
             let mi = NSMenuItem(title: s.label, action: #selector(pick(_:)), keyEquivalent: "")
@@ -120,34 +137,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(setItem)
         menu.addItem(.separator())
 
-        let wifiPair = NSMenuItem(title: "Pair over Wi-Fi…", action: #selector(pairWifi),
-                                  keyEquivalent: "")
-        wifiPair.target = self
-        menu.addItem(wifiPair)
+        let bt = NSMenuItem(title: controller.bluetoothReady
+                              ? "Pair over Bluetooth…" : "Bluetooth: no panel in range",
+                            action: #selector(pairBluetooth), keyEquivalent: "")
+        bt.target = self
+        bt.isEnabled = controller.bluetoothReady
+        menu.addItem(bt)
 
-        let pairItem = NSMenuItem(title: controller.bluetoothReady
-                                    ? "Pair over Bluetooth…" : "Bluetooth: no panel in range",
-                                  action: #selector(pairBluetooth), keyEquivalent: "")
-        pairItem.target = self
-        pairItem.isEnabled = controller.bluetoothReady
-        menu.addItem(pairItem)
+        let again = NSMenuItem(title: "Set up again…", action: #selector(runSetup), keyEquivalent: "")
+        again.target = self
+        menu.addItem(again)
 
-        let findItem = NSMenuItem(title: "Find panel", action: #selector(findPanel), keyEquivalent: "")
-        findItem.target = self
-        menu.addItem(findItem)
-
-        let hostTitle = Prefs.host.isEmpty ? "Panel address…" : "Panel address: \(Prefs.host)"
-        let hostItem = NSMenuItem(title: hostTitle, action: #selector(showHostPrompt), keyEquivalent: "")
-        hostItem.target = self
+        let hostItem = NSMenuItem(title: "Panel: \(Prefs.host.isEmpty ? "—" : Prefs.host)",
+                                  action: nil, keyEquivalent: "")
+        hostItem.isEnabled = false
         menu.addItem(hostItem)
 
-        let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)),
+                              keyEquivalent: "q")
         menu.addItem(quit)
 
         item.menu = menu
         item.button?.image = NSImage(
             systemSymbolName: controller.paused ? "rectangle" : "rectangle.fill",
             accessibilityDescription: "Pixelbar")
+    }
+
+    /// Find the panel, then pair with it. Stops at whichever part is missing
+    /// and says why, rather than reporting a generic failure for two quite
+    /// different problems.
+    @objc private func runSetup() {
+        Task {
+            await controller.refreshSetup()
+
+            if Prefs.host.isEmpty {
+                await autoFind(announce: true)
+                if Prefs.host.isEmpty { return }   // autoFind already explained
+            }
+
+            await controller.refreshSetup()
+            if controller.isReady {
+                note("Already set up — the panel is at \(Prefs.host).")
+                rebuildMenu()
+                return
+            }
+
+            guard await controller.beginWifiPairing() else {
+                note("Found the panel at \(Prefs.host) but could not ask it to "
+                     + "pair.\n\nIs it still on this network?")
+                return
+            }
+            let a = NSAlert()
+            a.messageText = "Pair with the panel"
+            a.informativeText = "It is showing six digits. Type them here.\n\n"
+                + "The code exists nowhere else, so a Mac that can produce it "
+                + "is a Mac in the room."
+            let f = NSTextField(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
+            f.placeholderString = "000000"
+            a.accessoryView = f
+            a.addButton(withTitle: "Pair")
+            a.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            guard a.runModal() == .alertFirstButtonReturn,
+                  let code = Int(f.stringValue.trimmingCharacters(in: .whitespaces))
+            else { rebuildMenu(); return }
+
+            if await controller.redeemWifiCode(code) {
+                note("Paired. Pixelbar will set your status when your microphone "
+                     + "or camera opens.")
+            } else {
+                note("That code was wrong or had expired.\n\nThe code lasts a "
+                     + "minute and allows three tries; run setup again for a new one.")
+            }
+            rebuildMenu()
+        }
     }
 
     @objc private func togglePause() { controller.paused.toggle(); rebuildMenu() }
@@ -174,33 +237,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func findPanel() { Task { await autoFind(announce: true) } }
-
-    @objc private func pairWifi() {
-        Task {
-            guard await controller.beginWifiPairing() else {
-                note("Could not reach the panel over Wi-Fi.")
-                return
-            }
-            let a = NSAlert()
-            a.messageText = "Pair over Wi-Fi"
-            a.informativeText = "The panel is showing six digits. Type them here."
-            let f = NSTextField(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
-            f.placeholderString = "000000"
-            a.accessoryView = f
-            a.addButton(withTitle: "Pair")
-            a.addButton(withTitle: "Cancel")
-            NSApp.activate(ignoringOtherApps: true)
-            guard a.runModal() == .alertFirstButtonReturn,
-                  let code = Int(f.stringValue.trimmingCharacters(in: .whitespaces))
-            else { return }
-            if await controller.redeemWifiCode(code) {
-                note("Paired. This Mac can drive the panel over Wi-Fi.")
-            } else {
-                note("That code was wrong or had expired. Try again.")
-            }
-            rebuildMenu()
-        }
-    }
 
     @objc private func pairBluetooth() {
         Task {

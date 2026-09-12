@@ -48,6 +48,30 @@ final class Controller: ObservableObject {
     @Published private(set) var pushed: Status?     // what we last set, if anything
     @Published var paused: Bool = Prefs.paused { didSet { Prefs.paused = paused; Task { await settle() } } }
 
+    /// How far through setup this Mac is.
+    ///
+    /// Explicit rather than inferred at each use site, because "has an
+    /// address", "has a token" and "can actually reach it" are three different
+    /// failures with three different remedies, and a menu that greys
+    /// everything out without saying which is just broken.
+    enum Setup: Equatable {
+        case needsPanel          // no address yet
+        case needsPairing        // address, but the panel refuses us
+        case unreachable         // paired once, nothing answering now
+        case ready
+
+        var summary: String {
+            switch self {
+            case .needsPanel: return "Not set up — find your panel"
+            case .needsPairing: return "Not paired — pair with the panel"
+            case .unreachable: return "Panel unreachable"
+            case .ready: return "Ready"
+            }
+        }
+    }
+
+    @Published private(set) var setup: Setup = .needsPanel
+
     /// Which pipe the last command actually went down.
     enum Link: String { case wifi = "Wi-Fi", bluetooth = "Bluetooth", none = "no link" }
     @Published private(set) var link: Link = .none
@@ -106,6 +130,7 @@ final class Controller: ObservableObject {
                 await evaluate()
             }
             reachable = await device.state() != nil
+            await refreshSetup()
 
             // Once a minute, not every five seconds. A calendar changes on the
             // scale that meetings are moved, and the countdown on the panel is
@@ -188,7 +213,7 @@ final class Controller: ObservableObject {
     /// So the sensors win, and the calendar fills the gap where there are no
     /// sensors to go on.
     private var wanted: Status? {
-        if paused { return nil }
+        if paused || setup != .ready { return nil }
         if camOn && Prefs.camEnabled { return .call }
         if micOn && Prefs.micEnabled { return .busy }
         if Prefs.calEnabled, let m = meeting, m.isNow { return .meet }
@@ -255,6 +280,24 @@ final class Controller: ObservableObject {
         reachable = await device.state() != nil
     }
 
+    func refreshSetup() async {
+        // Each await on its own line: `a || await b` puts the await inside an
+        // autoclosure, which cannot cross into an actor.
+        let host = await device.currentHost()
+        let refused = await device.needsPairing
+        if host.isEmpty && !ble.ready {
+            setup = .needsPanel
+        } else if Prefs.token.isEmpty || refused {
+            setup = .needsPairing
+        } else if !reachable && !ble.ready {
+            setup = .unreachable
+        } else {
+            setup = .ready
+        }
+    }
+
+    var isReady: Bool { setup == .ready }
+
     func host() async -> String { await device.currentHost() }
     /// WiFi first, Bluetooth second.
     ///
@@ -290,6 +333,9 @@ final class Controller: ObservableObject {
     func redeemWifiCode(_ code: Int) async -> Bool {
         guard let t = await device.redeem(code) else { return false }
         Prefs.token = t
+        await refreshSetup()
+        // Whatever the sensors already say is true now becomes worth sending.
+        await evaluate()
         return true
     }
 
