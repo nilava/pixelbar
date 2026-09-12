@@ -55,6 +55,7 @@ class DevicePorts : public ui::Ports {
   void begin_pairing() override;
   void forget_hosts() override;
   void forget_network() override;
+  void factory_reset() override;
 
   void set_net(ui::Ports::NetMode m, const char* text) {
     net_mode_ = m;

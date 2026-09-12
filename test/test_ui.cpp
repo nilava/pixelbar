@@ -821,6 +821,7 @@ class TestPorts : public Ports {
   void begin_pairing() override { ++pair_calls; }
   void forget_hosts() override { ++forget_host_calls; }
   void forget_network() override { ++forget_net_calls; }
+  void factory_reset() override { ++factory_calls; }
 
   int pairs = 0;
   const char* names[8] = {"MAC", "PHONE", "IPAD", "WORK",
@@ -828,6 +829,7 @@ class TestPorts : public Ports {
   int pair_calls = 0;
   int forget_host_calls = 0;
   int forget_net_calls = 0;
+  int factory_calls = 0;
 
   RawInput raw;
   Settings stored;
@@ -1223,6 +1225,47 @@ void test_app_adjust() {
     r.press();
     r.settle();
     CHECK_EQ(r.ports.forget_host_calls, 1);
+  }
+
+  CASE("the panel can erase itself, but only on purpose");
+  {
+    // The way back for a panel whose paired host is gone. It has to be
+    // reachable from the knob alone — and it has to be impossible to reach by
+    // overshooting, which is why it sits in a group of its own behind a
+    // confirm that opens on no.
+    AppRig r;
+    r.enter("SYS", "RSET");
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::Confirm));
+    CHECK(!r.app.state().confirm_yes);
+    r.press();
+    r.settle();
+    CHECK_EQ(r.ports.factory_calls, 0);
+
+    r.enter("SYS", "RSET");
+    r.turn(1);
+    r.press();
+    r.settle();
+    CHECK_EQ(r.ports.factory_calls, 1);
+  }
+
+  CASE("every confirm says what it is about to do, in the width available");
+  {
+    // The confirm word is centred across the whole panel rather than in the
+    // fifteen columns beside an icon, but it is the same font and the same
+    // failure: a label a pixel too wide is silently clipped.
+    for (int g = 0; g < ui::kGroupCount; ++g) {
+      const ui::SettingGroup& grp = ui::kGroups[g];
+      for (int i = 0; i < grp.count; ++i) {
+        if (grp.items[i].kind != ui::SettingKind::Action) continue;
+        AppRig r;
+        r.enter(grp.row.label, grp.items[i].row.label);
+        if (r.app.screen() != panel::Screen::Confirm) continue;
+        const char* label = r.app.state().confirm_label;
+        CHECK(label != nullptr && label[0] != '\0');
+        CHECK(panel::mini_text_fits(label, panel::kWidth));
+      }
+    }
   }
 
   CASE("a confirm answers on any turn, not on a count of them");

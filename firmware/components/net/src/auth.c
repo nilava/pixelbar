@@ -210,11 +210,32 @@ bool auth_issue(const char* name, const char** token_out) {
   // second code over that link would be asking the same question twice and
   // calling it security. The characteristic that reaches this is AUTHEN-gated,
   // so there is no way in here without having done it.
-  if (s_clients.count >= AUTH_MAX_CLIENTS) {
-    ESP_LOGW(TAG, "no room: %d clients already paired", AUTH_MAX_CLIENTS);
-    return false;
+  // A host that is setting up again is the same host, so it takes its old slot
+  // back rather than a new one.
+  //
+  // This appended unconditionally, and setup is a thing people re-run: an
+  // interrupted attempt, a network typed wrong, a panel reset. Eight of those
+  // from one Mac filled the table, and from then on every token read was
+  // refused for want of room — which showed up in the helper as setup hanging
+  // at the last step, with the eight culprits all called the same thing. The
+  // old token is dead to that host anyway; it is re-onboarding precisely
+  // because it does not have one it can use.
+  auth_client_t* c = NULL;
+  for (int i = 0; i < s_clients.count; ++i) {
+    if (strncmp(s_clients.c[i].name, (name && name[0]) ? name : "host",
+                sizeof(s_clients.c[i].name)) == 0) {
+      c = &s_clients.c[i];
+      ESP_LOGI(TAG, "re-issuing to \"%s\" (slot %d)", c->name, i);
+      break;
+    }
   }
-  auth_client_t* c = &s_clients.c[s_clients.count++];
+  if (!c) {
+    if (s_clients.count >= AUTH_MAX_CLIENTS) {
+      ESP_LOGW(TAG, "no room: %d clients already paired", AUTH_MAX_CLIENTS);
+      return false;
+    }
+    c = &s_clients.c[s_clients.count++];
+  }
   memset(c, 0, sizeof(*c));
   make_token(c->token);
   snprintf(c->name, sizeof(c->name), "%s", (name && name[0]) ? name : "host");

@@ -28,6 +28,7 @@ final class Onboarding: ObservableObject {
         case scanning
         case chooseNetwork([Network])
         case joining(String)
+        case collecting                 // the address and the token
         case done(ip: String)
         case failed(String)
 
@@ -39,6 +40,7 @@ final class Onboarding: ObservableObject {
             case .scanning: return "Asking the panel what it can see…"
             case .chooseNetwork: return "Choose a network"
             case .joining(let s): return "Joining \(s)…"
+            case .collecting: return "Collecting the address and a token…"
             case .done(let ip): return "Set up — the panel is at \(ip)"
             case .failed(let why): return "Setup failed: \(why)"
             }
@@ -57,6 +59,12 @@ final class Onboarding: ObservableObject {
         ble.onValue = { [weak self] id, data in
             Task { @MainActor in self?.deliver(id, data) }
         }
+        // A refusal resolves the waiter immediately. It used to resolve
+        // nothing, so a panel that answered at once with a reason looked
+        // exactly like a panel that had stopped answering.
+        ble.onReadError = { [weak self] id, why in
+            Task { @MainActor in self?.fail(id, why) }
+        }
         // The one failure nothing here can retry its way out of. macOS will not
         // offer the passkey dialog again while it believes it already holds
         // keys, so saying so — with the exact place to go — is the whole
@@ -74,6 +82,15 @@ final class Onboarding: ObservableObject {
     private func deliver(_ id: CBUUID, _ data: Data) {
         guard let w = waiters.removeValue(forKey: id) else { return }
         w(data)
+    }
+
+    /// The reason the last read failed, for whichever step is waiting on it.
+    private var lastError: String = ""
+
+    private func fail(_ id: CBUUID, _ why: String) {
+        lastError = why
+        guard let w = waiters.removeValue(forKey: id) else { return }
+        w(nil)
     }
 
     /// Reads one characteristic and parses the answer, or gives up.
@@ -196,9 +213,24 @@ final class Onboarding: ObservableObject {
             return nil
         }
 
-        guard let j = await read(BLEIDs.token), let token = j["token"] as? String,
-              token.count == 32 else {
-            step = .failed("the panel would not issue a token")
+        // Retried, and for a reason rather than out of superstition: this is
+        // the first thing asked over Bluetooth *after* the panel has joined a
+        // network, and the two radios share one antenna and one core. A single
+        // window here was thin exactly when the link was busiest.
+        var token = ""
+        for attempt in 0..<4 {
+            step = .collecting
+            if let j = await read(BLEIDs.token, timeout: 8),
+               let t = j["token"] as? String, t.count == 32 {
+                token = t
+                break
+            }
+            if attempt < 3 { try? await Task.sleep(for: .seconds(2)) }
+        }
+        guard !token.isEmpty else {
+            step = .failed(lastError.isEmpty
+                           ? "the panel would not issue a token"
+                           : "the panel would not issue a token: \(lastError)")
             return nil
         }
 

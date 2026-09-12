@@ -48,6 +48,7 @@ enum class SettingId : uint8_t {
   ActionPair,
   ActionForgetHosts,
   ActionForgetWifi,
+  ActionFactory,
   Count,
 };
 

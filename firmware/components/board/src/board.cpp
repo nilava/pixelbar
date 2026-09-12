@@ -326,5 +326,6 @@ const char* DevicePorts::paired_name(int index) { return net_paired_name(index);
 void DevicePorts::begin_pairing() { net_begin_pairing(); }
 void DevicePorts::forget_hosts() { net_forget_hosts(); }
 void DevicePorts::forget_network() { net_forget_network(); }
+void DevicePorts::factory_reset() { net_factory_reset(); }
 
 }  // namespace board

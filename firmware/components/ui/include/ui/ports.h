@@ -92,6 +92,10 @@ struct Ports {
   virtual void begin_pairing() {}
   virtual void forget_hosts() {}
   virtual void forget_network() {}
+  // Tokens, bonds and the network, and a restart into setup. The one action
+  // here that cannot be undone from anywhere else, and the only way back for a
+  // panel whose paired host no longer exists.
+  virtual void factory_reset() {}
 
   // Something a host asked the panel to show.
   //

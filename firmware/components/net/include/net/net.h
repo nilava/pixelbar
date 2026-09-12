@@ -142,6 +142,11 @@ void net_begin_pairing(void);
 // Revokes every token and forgets every Bluetooth bond. The device stays on
 // the network; it is the hosts that have to come back.
 void net_forget_hosts(void);
+// Forgets everything — tokens, bonds and the network — and restarts into
+// setup. The panel can ask for this as well as an authenticated host, which is
+// what makes a device recoverable when the thing that was paired to it is gone.
+void net_factory_reset(void);
+
 // Forgets the network and restarts into setup mode. Tokens survive: the people
 // who were allowed in are still allowed in once there is a way in.
 void net_forget_network(void);

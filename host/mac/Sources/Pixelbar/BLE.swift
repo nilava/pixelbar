@@ -42,6 +42,13 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
     var onError: ((String) -> Void)?
     /// A characteristic answered with a value.
     var onValue: ((CBUUID, Data) -> Void)?
+    /// A read we asked for came back as an error rather than a value.
+    ///
+    /// Without this a failed read was indistinguishable from a slow one:
+    /// nothing resolved the waiter, so every refusal cost the full timeout and
+    /// then reported that the panel had not answered — when it had answered
+    /// immediately, and said why.
+    var onReadError: ((CBUUID, String) -> Void)?
     /// The link came up secured — which is the only signal that pairing
     /// actually completed, because CoreBluetooth has no such callback.
     var onSecured: (() -> Void)?
@@ -309,14 +316,19 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
                 log("needs pairing — the panel is showing a code")
                 onNeedsPairing?()
                 beginPairingRetries()
+                // Deliberately not resolved: this one *is* worth waiting out,
+                // because somebody is reading six digits off a panel and the
+                // retry will answer it properly.
                 return
             }
             if isStalePairing(e) {
                 log("this Mac is holding old keys for the panel")
                 onStalePairing?()
+                if solicited { onReadError?(c.uuid, "this Mac holds old pairing keys") }
                 return
             }
             log("read failed: \(e.localizedDescription)")
+            if solicited { onReadError?(c.uuid, e.localizedDescription) }
             onError?(e.localizedDescription)
             return
         }

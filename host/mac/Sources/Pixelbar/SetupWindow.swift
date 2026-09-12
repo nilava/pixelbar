@@ -109,6 +109,7 @@ struct SetupView: View {
         case .scanning: return 2
         case .chooseNetwork: return 2
         case .joining: return 3
+        case .collecting: return 4
         case .done: return 4
         case .failed: return 4
         }

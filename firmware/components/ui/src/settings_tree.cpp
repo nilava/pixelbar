@@ -31,6 +31,7 @@ constexpr RGB kTouch(60, 220, 140);
 constexpr RGB kClock(200, 200, 255);
 constexpr RGB kNet(60, 200, 255);
 constexpr RGB kLink(120, 140, 255);
+constexpr RGB kSystem(255, 60, 40);
 
 #define ROW(icon, label, colour) {&panel::icon, label, colour, false}
 #define SPIN(icon, label, colour) {&panel::icon, label, colour, true}
@@ -122,6 +123,16 @@ const SettingDesc kLinkItems[] = {
     ACTION(kIconCross, "CLR", kLink, ActionForgetHosts),
 };
 
+// Its own group, and last.
+//
+// Not tucked in beside "forget the network", which is the neighbour it most
+// resembles and the reason to keep it apart: one of them costs you a Wi-Fi
+// password and the other costs you every pairing on every host. A group of its
+// own means reaching it is a decision rather than an overshoot.
+const SettingDesc kSystemItems[] = {
+    ACTION(kIconWarning, "RSET", kSystem, ActionFactory),
+};
+
 #define GROUP(row_, items_) \
   {row_, items_, static_cast<uint8_t>(sizeof(items_) / sizeof(items_[0])), panel::Screen::Count}
 #define SHORTCUT(row_, screen_) {row_, nullptr, 0, screen_}
@@ -138,6 +149,7 @@ const SettingGroup kGroups[] = {
     GROUP(SPIN(kIconGear, "CLCK", kClock), kClockItems),
     GROUP(ROW(kIconDownload, "NET", kNet), kNetItems),
     GROUP(ROW(kIconLock, "LINK", kLink), kLinkItems),
+    GROUP(ROW(kIconWarning, "SYS", kSystem), kSystemItems),
 };
 const int kGroupCount = static_cast<int>(sizeof(kGroups) / sizeof(kGroups[0]));
 
@@ -166,6 +178,7 @@ int setting_get(const Settings& s, SettingId id) {
     case SettingId::ActionPair:
     case SettingId::ActionForgetHosts:
     case SettingId::ActionForgetWifi:
+    case SettingId::ActionFactory:
     case SettingId::Count: break;
   }
   return 0;
@@ -190,6 +203,7 @@ void setting_set(Settings& s, SettingId id, int v) {
     case SettingId::ActionPair:
     case SettingId::ActionForgetHosts:
     case SettingId::ActionForgetWifi:
+    case SettingId::ActionFactory:
     case SettingId::Count: break;
   }
   // Every write goes through the same clamp the loader uses, so a value that

@@ -526,6 +526,9 @@ void App::begin_action(SettingId id) {
     case SettingId::ActionForgetWifi:
       ui_.confirm_label = "WIFI";
       break;
+    case SettingId::ActionFactory:
+      ui_.confirm_label = "ERASE";
+      break;
     default:
       return;
   }
@@ -541,6 +544,7 @@ void App::run_action(SettingId id) {
   switch (id) {
     case SettingId::ActionForgetHosts: ports_->forget_hosts(); break;
     case SettingId::ActionForgetWifi: ports_->forget_network(); break;
+    case SettingId::ActionFactory: ports_->factory_reset(); break;
     default: break;
   }
 }

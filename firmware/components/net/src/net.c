@@ -707,18 +707,30 @@ static esp_err_t delete_client(httpd_req_t* r) {
 // that forgetting one and not the others leaves a device in a state nobody
 // designed: credentials with no clients that can use them, or bonds pointing
 // at tokens that no longer exist.
-static esp_err_t post_factory(httpd_req_t* r) {
-  if (!allowed(r)) return refuse(r);
+// Everything the device knows about who it belongs to, forgotten.
+//
+// One function rather than three calls repeated at each entry point: there are
+// two ways in now — an authenticated POST and the knob — and a reset that
+// cleared two stores from one caller and three from the other would be the
+// kind of difference nobody finds until they are standing in front of a panel
+// that will not pair.
+void net_factory_reset(void) {
   ESP_LOGW(TAG, "factory reset requested");
   auth_revoke_all();   // every API token
   ble_forget_all();    // every Bluetooth bond
   creds_clear();       // the network
-  httpd_resp_set_type(r, "application/json");
-  httpd_resp_sendstr(r, "{\"reset\":true,\"restarting\":true}");
   // A clean boot is the one path back into setup that is certain to work, and
   // this is a deliberate, rare act — the same reasoning as wifi/forget.
   if (s_ap_down_timer) esp_timer_stop(s_ap_down_timer);
+  vTaskDelay(pdMS_TO_TICKS(250));
   esp_restart();
+}
+
+static esp_err_t post_factory(httpd_req_t* r) {
+  if (!allowed(r)) return refuse(r);
+  httpd_resp_set_type(r, "application/json");
+  httpd_resp_sendstr(r, "{\"reset\":true,\"restarting\":true}");
+  net_factory_reset();
   return ESP_OK;
 }
 
