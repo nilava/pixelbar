@@ -137,12 +137,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(setItem)
         menu.addItem(.separator())
 
-        let bt = NSMenuItem(title: controller.bluetoothReady
-                              ? "Pair over Bluetooth…" : "Bluetooth: no panel in range",
-                            action: #selector(pairBluetooth), keyEquivalent: "")
+        let btTitle: String
+        if controller.bluetoothUsable { btTitle = "Bluetooth: paired" }
+        else if controller.bluetoothReady { btTitle = "Pair over Bluetooth…" }
+        else { btTitle = "Bluetooth: no panel in range" }
+        let bt = NSMenuItem(title: btTitle, action: #selector(pairBluetooth), keyEquivalent: "")
         bt.target = self
-        bt.isEnabled = controller.bluetoothReady
+        bt.isEnabled = controller.bluetoothReady && !controller.bluetoothUsable
         menu.addItem(bt)
+
+        if !controller.bleLog.isEmpty {
+            let l = NSMenuItem(title: "Bluetooth: \(controller.bleLog)", action: nil,
+                               keyEquivalent: "")
+            l.isEnabled = false
+            menu.addItem(l)
+        }
 
         let again = NSMenuItem(title: "Set up again…", action: #selector(runSetup), keyEquivalent: "")
         again.target = self
@@ -240,11 +249,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func pairBluetooth() {
         Task {
+            controller.blePairingWanted = false
             await controller.pair()
-            note("The panel is showing a six-digit code. macOS will ask for it "
-                 + "in a moment — type what the panel shows.\n\nThe code exists "
-                 + "nowhere else, so a host that can produce it is a host in the "
-                 + "room.")
+            // Wait for the device to actually refuse us before claiming a code
+            // is on screen. The old version said so unconditionally, which was
+            // reassuring and wrong: the operation it fired was unacknowledged
+            // and nothing ever came back.
+            for _ in 0..<20 {
+                if controller.blePairingWanted || controller.bluetoothUsable { break }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            if controller.bluetoothUsable {
+                note("Already paired over Bluetooth.")
+            } else if controller.blePairingWanted {
+                note("The panel is showing a six-digit code. macOS will ask for "
+                     + "it — type what the panel shows.\n\nThe code exists "
+                     + "nowhere else, so a host that can produce it is a host in "
+                     + "the room.")
+            } else {
+                note("The panel did not answer over Bluetooth."
+                     + (controller.bleLog.isEmpty ? "" : "\n\n\(controller.bleLog)"))
+            }
+            rebuildMenu()
         }
     }
 

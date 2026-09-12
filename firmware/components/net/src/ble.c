@@ -31,6 +31,15 @@
 
 static const char* TAG = "ble";
 
+// Declared here because ESP-IDF does not declare it anywhere.
+//
+// store/config/ble_store_config.h is included above and does not carry this
+// prototype; upstream calls it from a Mynewt sysinit stage that the ESP port
+// does not run, and IDF's own NimBLE examples forward-declare it exactly like
+// this. Without the declaration the call compiles to an implicit int-returning
+// function under -Werror, and without the call there is no bond store at all.
+extern void ble_store_config_init(void);
+
 // Declared in net.c: one parser and one state builder, shared with HTTP.
 int net_apply_input_json(const char* body);
 int net_state_json(char* out, size_t cap);
@@ -98,9 +107,21 @@ static const struct ble_gatt_svc_def kServices[] = {
         .uuid = &kSvcUuid.u,
         .characteristics = (struct ble_gatt_chr_def[]){
             {
-                // Write without response: a status push is fire-and-forget and
-                // waiting for an acknowledgement would double the latency of
-                // the one thing this is for.
+                // Write *with* response, and only with response.
+                //
+                // This carried WRITE_NO_RSP as well, on the reasoning that a
+                // status push is fire-and-forget and an acknowledgement would
+                // double its latency. That reasoning cost the entire pairing
+                // flow. An ATT Write Command has no response PDU, so when the
+                // server rejects it for insufficient authentication there is
+                // nothing to carry the error back — the central never learns
+                // that pairing is required and never starts it. macOS prefers
+                // the unacknowledged form whenever a characteristic offers it,
+                // so the write that was supposed to provoke pairing was
+                // silently dropped on the floor every time.
+                //
+                // An unacknowledged write has no business on a characteristic
+                // whose rejection is meaningful.
                 .uuid = &kCmdUuid.u,
                 .access_cb = on_cmd,
                 // ENC and AUTHEN, not plain WRITE. Without these the panel is
@@ -111,8 +132,8 @@ static const struct ble_gatt_svc_def kServices[] = {
                 // AUTHEN is the half that matters. ENC alone is satisfied by
                 // Just Works, which encrypts against eavesdropping and
                 // authenticates nobody.
-                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP |
-                         BLE_GATT_CHR_F_WRITE_ENC | BLE_GATT_CHR_F_WRITE_AUTHEN,
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC |
+                         BLE_GATT_CHR_F_WRITE_AUTHEN,
             },
             {
                 .uuid = &kStateUuid.u,
@@ -164,6 +185,11 @@ static int on_gap(struct ble_gap_event* ev, void* arg) {
       return 0;
     case BLE_GAP_EVENT_DISCONNECT:
       s_conn = BLE_HS_CONN_HANDLE_NONE;
+      // Also here, not only on ENC_CHANGE. A central that gives up part way
+      // through — which is what cancelling the macOS dialog does — disconnects
+      // without ever completing the exchange, and the panel was left showing a
+      // code that would never be accepted and would never go away.
+      s_passkey = 0;
       ESP_LOGI(TAG, "disconnected (%d)", ev->disconnect.reason);
       advertise();
       return 0;
@@ -291,8 +317,21 @@ esp_err_t ble_start(const char* name) {
   ble_hs_cfg.sm_sc = 1;     // Secure Connections: ECDH rather than legacy
   ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
   ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
-  // Bonds live in NVS, so a paired Mac reconnects silently after a power cut.
   ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+
+  // Bonds live in NVS — and now that is actually true.
+  //
+  // This line was missing and the comment above it claimed otherwise. Without
+  // it, ble_hs_cfg.store_read_cb / write_cb / delete_cb are all NULL and every
+  // store operation returns BLE_HS_ENOTSUP. NimBLE discards the return value of
+  // ble_store_write_*, so a first pairing *appeared* to succeed — the link
+  // encrypted, ENC_CHANGE reported "established" — and was forgotten the
+  // instant it completed. The central kept its half of the keys, so every
+  // subsequent connection failed encryption against a device that had never
+  // heard of it, and the repeat-pairing escape hatch was a no-op for the same
+  // reason. Nothing in the ESP-IDF port calls this for you: it is invoked from
+  // a Mynewt sysinit stage that this port does not run.
+  ble_store_config_init();
 
   ble_svc_gap_init();
   ble_svc_gatt_init();

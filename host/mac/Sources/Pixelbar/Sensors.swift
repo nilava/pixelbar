@@ -6,6 +6,7 @@
 // microphone access in order to know the microphone was busy would be a worse
 // trade than the feature is worth.
 import AVFoundation
+import CoreMediaIO
 import CoreAudio
 import Foundation
 
@@ -108,16 +109,87 @@ final class MicMonitor {
 
 /// The camera.
 ///
-/// There is no public notification for "some other process is using the
-/// camera", so this is polled — but cheaply, and only while it matters. A
-/// camera that is on is nearly always on *because* the microphone is, so the
-/// poll runs at a relaxed interval and the mic listener does the fast work.
+/// CoreMediaIO, not AVFoundation. This used `AVCaptureDevice`'s
+/// `isInUseByAnotherApplication`, which is documented for the *other* process
+/// case and is not reliable for it on current macOS — the microphone worked
+/// and the camera silently never did.
+///
+/// `kCMIODevicePropertyDeviceIsRunningSomewhere` is the exact analogue of the
+/// audio property above, down to the name, and it is reliable for the same
+/// reason: it is the system's own answer to "is some process running this
+/// device", rather than an inference drawn from one. It needs no camera
+/// permission, for the same reason the audio one needs no microphone
+/// permission — it asks whether the device is running, not what it is
+/// capturing — and it supports a property listener, so this is push-driven
+/// rather than polled.
 enum CameraMonitor {
+    /// Must be set before anything else here is called; CoreMediaIO hides its
+    /// devices from a process that has not asked to see them all.
+    private static var allowed = false
+
+    private static func allowScreenAndOtherDevices() {
+        guard !allowed else { return }
+        allowed = true
+        var addr = CMIOObjectPropertyAddress(
+            mSelector: CMIOObjectPropertySelector(kCMIOHardwarePropertyAllowScreenCaptureDevices),
+            mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
+            mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain))
+        var yes: UInt32 = 1
+        CMIOObjectSetPropertyData(CMIOObjectID(kCMIOObjectSystemObject), &addr, 0, nil,
+                                  UInt32(MemoryLayout<UInt32>.size), &yes)
+    }
+
     static func anyRunning() -> Bool {
-        let types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera, .external, .continuityCamera]
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: types, mediaType: .video, position: .unspecified)
-        for d in session.devices where d.isInUseByAnotherApplication { return true }
+        allowScreenAndOtherDevices()
+        for dev in devices() where isRunning(dev) { return true }
         return false
+    }
+
+    private static func devices() -> [CMIOObjectID] {
+        var addr = CMIOObjectPropertyAddress(
+            mSelector: CMIOObjectPropertySelector(kCMIOHardwarePropertyDevices),
+            mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
+            mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain))
+        var size: UInt32 = 0
+        guard CMIOObjectGetPropertyDataSize(CMIOObjectID(kCMIOObjectSystemObject),
+                                            &addr, 0, nil, &size) == noErr, size > 0
+        else { return [] }
+        var ids = [CMIOObjectID](repeating: 0,
+                                 count: Int(size) / MemoryLayout<CMIOObjectID>.size)
+        var used: UInt32 = 0
+        guard CMIOObjectGetPropertyData(CMIOObjectID(kCMIOObjectSystemObject), &addr, 0, nil,
+                                        size, &used, &ids) == noErr else { return [] }
+        return ids
+    }
+
+    private static func isRunning(_ dev: CMIOObjectID) -> Bool {
+        var addr = CMIOObjectPropertyAddress(
+            mSelector: CMIOObjectPropertySelector(kCMIODevicePropertyDeviceIsRunningSomewhere),
+            mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeWildcard),
+            mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementWildcard))
+        var running: UInt32 = 0
+        var used: UInt32 = 0
+        guard CMIOObjectGetPropertyData(dev, &addr, 0, nil,
+                                        UInt32(MemoryLayout<UInt32>.size), &used,
+                                        &running) == noErr else { return false }
+        return running != 0
+    }
+
+    /// The names of the devices being watched, for diagnostics. A camera that
+    /// is never listed can never be found running, and that failure is silent.
+    static func deviceNames() -> [String] {
+        allowScreenAndOtherDevices()
+        return devices().compactMap { dev -> String? in
+            var addr = CMIOObjectPropertyAddress(
+                mSelector: CMIOObjectPropertySelector(kCMIOObjectPropertyName),
+                mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
+                mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain))
+            var name: CFString = "" as CFString
+            var used: UInt32 = 0
+            guard CMIOObjectGetPropertyData(dev, &addr, 0, nil,
+                                            UInt32(MemoryLayout<CFString>.size), &used,
+                                            &name) == noErr else { return nil }
+            return name as String
+        }
     }
 }

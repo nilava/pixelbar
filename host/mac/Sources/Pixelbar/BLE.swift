@@ -19,6 +19,7 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
     private var central: CBCentralManager!
     private var panel: CBPeripheral?
     private var cmdChar: CBCharacteristic?
+    private var stateChar: CBCharacteristic?
     private var poweredOn = false
 
     /// Set when the panel is connected and its command characteristic is known,
@@ -30,6 +31,16 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
     /// advertising — and they are indistinguishable from "not ready" without
     /// somewhere to say which.
     var onLog: ((String) -> Void)?
+    /// Raised when the panel has refused an operation until the link is paired.
+    var onNeedsPairing: (() -> Void)?
+    var onError: ((String) -> Void)?
+    /// A characteristic answered with a value.
+    var onValue: ((CBUUID, Data) -> Void)?
+    /// True once an operation has actually been accepted, which is the only
+    /// evidence the link is encrypted and authenticated. `ready` means only
+    /// that the characteristic was found, and finding one requires no security.
+    private(set) var secured = false
+
     private func log(_ s: String) { onLog?(s) }
 
     override init() {
@@ -39,17 +50,30 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
         central = CBCentralManager(delegate: self, queue: DispatchQueue(label: "pixelbar.ble"))
     }
 
+    /// Provokes pairing without changing anything.
+    ///
+    /// A Read Request is acknowledged, so a rejection for insufficient
+    /// encryption comes back properly — and unlike the command write, its
+    /// success has no side effect on the panel. The state characteristic is
+    /// READ_ENC for exactly this.
+    func provokePairing() {
+        guard let p = panel, let s = stateChar else { return }
+        log("reading state to provoke pairing")
+        p.readValue(for: s)
+    }
+
     func send(_ body: [String: Any]) {
         guard ready, let p = panel, let c = cmdChar,
               let data = try? JSONSerialization.data(withJSONObject: body) else { return }
-        // Without response: a status push is fire-and-forget, and waiting for
-        // an acknowledgement would double the latency of the one thing this is
-        // for. The characteristic accepts both, so fall back if the peripheral
-        // says it cannot take the fast kind.
-        let kind: CBCharacteristicWriteType =
-            p.canSendWriteWithoutResponse && c.properties.contains(.writeWithoutResponse)
-            ? .withoutResponse : .withResponse
-        p.writeValue(data, for: c, type: kind)
+        // Always with response.
+        //
+        // This preferred the unacknowledged form when the characteristic
+        // offered it, which cost the entire pairing flow: an ATT Write Command
+        // has no response PDU, so a rejection for insufficient authentication
+        // cannot come back, CoreBluetooth never learns pairing is needed, and
+        // never starts it. The device no longer offers the fast form at all;
+        // asking for it explicitly here too means this file says why.
+        p.writeValue(data, for: c, type: .withResponse)
     }
 
     // MARK: central
@@ -96,6 +120,8 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
                         error: Error?) {
         panel = nil
         cmdChar = nil
+        stateChar = nil
+        secured = false
         setReady(false)
         // Straight back to looking. A panel that was unplugged and plugged in
         // again should be picked up without anyone being told about it.
@@ -117,11 +143,61 @@ final class BLETransport: NSObject, CBCentralManagerDelegate, CBPeripheralDelega
 
     func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor service: CBService,
                     error: Error?) {
-        for c in service.characteristics ?? [] where c.uuid == BLEIDs.command {
-            cmdChar = c
+        for c in service.characteristics ?? [] {
+            if c.uuid == BLEIDs.command { cmdChar = c }
+            if c.uuid == BLEIDs.state { stateChar = c }
         }
         log("characteristics: \(service.characteristics?.count ?? 0), command \(cmdChar == nil ? "missing" : "found")")
         setReady(cmdChar != nil)
+    }
+
+    // MARK: results
+
+    /// The only callback that carries an ATT error back from a write, and the
+    /// only place insufficient-authentication becomes visible. Its absence is
+    /// why the bug report was "pairing does not work" rather than an error:
+    /// every failure below was happening silently.
+    func peripheral(_ p: CBPeripheral, didWriteValueFor c: CBCharacteristic,
+                    error: Error?) {
+        guard let e = error as NSError? else {
+            log("write accepted")
+            secured = true
+            return
+        }
+        if e.domain == CBATTErrorDomain, let att = CBATTError.Code(rawValue: e.code) {
+            switch att {
+            case .insufficientAuthentication, .insufficientEncryption:
+                // Expected once, on the write that provokes pairing: the system
+                // puts its dialog up and the operation is retried after the
+                // link comes up secured.
+                log("needs pairing — the panel is showing a code")
+                onNeedsPairing?()
+                return
+            default:
+                break
+            }
+        }
+        log("write failed: \(e.localizedDescription)")
+        onError?(e.localizedDescription)
+    }
+
+    func peripheral(_ p: CBPeripheral, didUpdateValueFor c: CBCharacteristic,
+                    error: Error?) {
+        if let e = error as NSError? {
+            if e.domain == CBATTErrorDomain,
+               let att = CBATTError.Code(rawValue: e.code),
+               att == .insufficientAuthentication || att == .insufficientEncryption {
+                log("needs pairing — the panel is showing a code")
+                onNeedsPairing?()
+                return
+            }
+            log("read failed: \(e.localizedDescription)")
+            onError?(e.localizedDescription)
+            return
+        }
+        secured = true
+        guard let d = c.value else { return }
+        onValue?(c.uuid, d)
     }
 
     private func setReady(_ v: Bool) {

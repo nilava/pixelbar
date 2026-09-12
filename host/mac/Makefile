@@ -16,7 +16,8 @@ $(BIN): $(SOURCES) Info.plist
 	@cp Info.plist $(APP)/Contents/Info.plist
 	swiftc -O -o $@ $(SOURCES) \
 		-framework AppKit -framework SwiftUI \
-		-framework AVFoundation -framework CoreAudio -framework CoreBluetooth
+		-framework AVFoundation -framework CoreAudio -framework CoreBluetooth \
+		-framework CoreMediaIO
 	@# Ad-hoc signed, with the bundle identifier spelled out.
 	@#
 	@# Not for distribution — this needs no account and no certificate. It is

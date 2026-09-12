@@ -115,6 +115,18 @@ final class Controller: ObservableObject {
         micOn = MicMonitor.anyInputRunning()
         camOn = CameraMonitor.anyRunning()
         ble.onReady = { [weak self] _ in Task { @MainActor in self?.objectWillChange.send() } }
+        // The diagnostic channel was declared and never connected, so every
+        // Bluetooth failure went nowhere. It is the reason the bug arrived as
+        // "doesn't work" rather than as a message.
+        ble.onLog = { [weak self] m in
+            Task { @MainActor in self?.bleLog = m }
+        }
+        ble.onNeedsPairing = { [weak self] in
+            Task { @MainActor in self?.blePairingWanted = true }
+        }
+        ble.onError = { [weak self] m in
+            Task { @MainActor in self?.bleLog = m }
+        }
         Task { await poll() }
     }
 
@@ -320,7 +332,13 @@ final class Controller: ObservableObject {
 
     /// True if either pipe can reach the panel.
     var anyLink: Bool { reachable || ble.ready }
+    /// Found and connected. Says nothing about whether the link is usable.
     var bluetoothReady: Bool { ble.ready }
+    /// Found, connected, *and* an operation has been accepted — which is the
+    /// only proof the link is paired.
+    var bluetoothUsable: Bool { ble.secured }
+    @Published private(set) var bleLog: String = ""
+    @Published var blePairingWanted = false
 
     /// Whether the panel has refused this Mac for want of a token.
     func needsWifiPairing() async -> Bool { await device.needsPairing }
@@ -348,9 +366,12 @@ final class Controller: ObservableObject {
     /// makes it a thing you sit down and do.
     func pair() async {
         guard ble.ready else { return }
-        // A write whose effect is nothing: the status it already has. What
-        // matters is that it is a write, and therefore needs the link secured.
-        let current = await currentStatus() ?? .free
-        ble.send(["status": current.rawValue])
+        // A read rather than a write. It is acknowledged either way, so a
+        // rejection comes back — but a read that *succeeds* changes nothing,
+        // whereas the write this used to do would set a status as a side
+        // effect of asking to pair. It also no longer goes via HTTP to find
+        // out what status to echo, which was an odd dependency in the path
+        // that exists for when there is no network.
+        ble.provokePairing()
     }
 }
