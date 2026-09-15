@@ -4,17 +4,22 @@ Everything the ESP32-C3 SuperMini connects to, and why each pin was chosen.
 The authoritative copy of the GPIO numbers is
 [`firmware/main/pins.h`](../firmware/main/pins.h) — this file explains them.
 
-> The panel is built and its mapping is confirmed. The encoder is being wired
-> now. The touch pads and the accelerometer are not connected yet — until they
-> are, the pads are driven from the web page instead, through the same pin
-> levels a real pad would produce.
+> The panel is built and its mapping is confirmed. The encoder is soldered
+> directly, and so are the three touch pads. The accelerometer is not fitted —
+> until it is, `motion_valid` stays false and the tilt gestures are absent
+> rather than guessed at.
+>
+> The web page still drives the pads, and always will: a web button and a
+> soldered pad arrive at the recogniser as the same pin levels, so the remote
+> control is not a stand-in for hardware that is now present but the same
+> input by another route.
 
 ## GPIO map
 
 | Function | GPIO | Notes |
 | --- | --- | --- |
 | LED data | 10 | to board 1 `DIN`, through a 330 Ω series resistor |
-| Touch, left | 3 | TTP223 `OUT`, active high |
+| Touch, left | 3 | TTP223 `OUT`, active high, momentary |
 | Touch, middle | 4 | |
 | Touch, right | 5 | |
 | I²C `SDA` | 6 | MPU-6050 |
@@ -41,6 +46,18 @@ safe for the encoder switch.
 defined for this target. That is why the three touch zones are external TTP223
 modules reading as plain digital inputs rather than the ESP32's built-in
 capacitive sensing.
+
+Each module has two solder jumpers, and the firmware assumes both are in their
+factory position: **momentary** (output high only while touched) and **active
+high**. Bridging the first makes every touch latch until the next one, so a
+tap-to-toggle becomes a pad that is never released; bridging the second makes
+an untouched pad read as permanently held, which the recogniser sees as a
+chord and answers by putting the panel to sleep. Neither failure looks like a
+wiring fault from the outside, so check the jumpers before the wires.
+
+The pins are configured with pull-downs. A TTP223 drives its output actively,
+so that is not there to set the level in normal use — it is what makes a module
+that has come loose read as untouched instead of floating and inventing input.
 
 **The C3 also has no PCNT peripheral**, so there is no hardware quadrature
 counter for the encoder. `SOC_PCNT_SUPPORTED` is defined for the S3 and absent

@@ -34,7 +34,15 @@ constexpr gpio_num_t kEncoderSw = GPIO_NUM_0;
 // not fitted is never read, and the layer above it is absent rather than wrong
 // — the same reason the accelerometer reports motion_valid false instead of a
 // plausible stationary reading.
-constexpr bool kTouchFitted = false;         // TTP223 modules not soldered yet
+// Soldered. The modules drive their output actively and the pins are
+// configured with pull-downs, so a module that comes loose reads untouched
+// rather than floating — which is the failure this flag was added for.
+//
+// TTP223 boards ship momentary and active high, which is what the reader
+// above assumes. Both are solder-jumper options on the module: bridging them
+// for toggle mode would make every touch latch until the next one, and for
+// active low would make the panel read as permanently held.
+constexpr bool kTouchFitted = true;
 constexpr bool kEncoderFitted = true;
 constexpr bool kEncoderSwitchFitted = true;
 constexpr bool kMotionFitted = false;        // MPU-6050 not fitted

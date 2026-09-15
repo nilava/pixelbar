@@ -133,6 +133,28 @@ esp_err_t init() {
   ESP_LOGI(TAG, "fitted: touch=%d encoder=%d switch=%d motion=%d",
            pins::kTouchFitted, pins::kEncoderFitted, pins::kEncoderSwitchFitted,
            pins::kMotionFitted);
+
+  // A pad that reads touched before anybody has touched it.
+  //
+  // Nothing is in contact with the panel at boot, so a high here is a fault
+  // and not input: the module's active-low jumper bridged, its output wired to
+  // 3V3 rather than to the pin, or a latched toggle-mode module. It matters
+  // more than it sounds, because two of them held is a chord, and the answer
+  // to a chord is to put the panel to sleep — so the symptom is a device that
+  // will not stay awake, which looks nothing like a wiring fault.
+  if (pins::kTouchFitted) {
+    const gpio_num_t pads[3] = {pins::kTouchLeft, pins::kTouchMiddle,
+                                pins::kTouchRight};
+    const char* names[3] = {"left", "middle", "right"};
+    for (int i = 0; i < 3; ++i) {
+      if (gpio_get_level(pads[i]) != 0) {
+        ESP_LOGW(TAG,
+                 "touch pad %s reads held at boot — check the TTP223 jumpers "
+                 "(momentary, active high) before the wiring",
+                 names[i]);
+      }
+    }
+  }
   ESP_LOGI(TAG, "resting levels: pads L=%d M=%d R=%d, enc A=%d B=%d sw=%d",
            gpio_get_level(pins::kTouchLeft), gpio_get_level(pins::kTouchMiddle),
            gpio_get_level(pins::kTouchRight), gpio_get_level(pins::kEncoderA),
