@@ -134,27 +134,7 @@ esp_err_t init() {
            pins::kTouchFitted, pins::kEncoderFitted, pins::kEncoderSwitchFitted,
            pins::kMotionFitted);
 
-  // A pad that reads touched before anybody has touched it.
-  //
-  // Nothing is in contact with the panel at boot, so a high here is a fault
-  // and not input: the module's active-low jumper bridged, its output wired to
-  // 3V3 rather than to the pin, or a latched toggle-mode module. It matters
-  // more than it sounds, because two of them held is a chord, and the answer
-  // to a chord is to put the panel to sleep — so the symptom is a device that
-  // will not stay awake, which looks nothing like a wiring fault.
-  if (pins::kTouchFitted) {
-    const gpio_num_t pads[3] = {pins::kTouchLeft, pins::kTouchMiddle,
-                                pins::kTouchRight};
-    const char* names[3] = {"left", "middle", "right"};
-    for (int i = 0; i < 3; ++i) {
-      if (gpio_get_level(pads[i]) != 0) {
-        ESP_LOGW(TAG,
-                 "touch pad %s reads held at boot — check the TTP223 jumpers "
-                 "(momentary, active high) before the wiring",
-                 names[i]);
-      }
-    }
-  }
+
   ESP_LOGI(TAG, "resting levels: pads L=%d M=%d R=%d, enc A=%d B=%d sw=%d",
            gpio_get_level(pins::kTouchLeft), gpio_get_level(pins::kTouchMiddle),
            gpio_get_level(pins::kTouchRight), gpio_get_level(pins::kEncoderA),
@@ -233,11 +213,49 @@ void DevicePorts::advance(float dt_s) {
 void DevicePorts::nudge_encoder(int detents) { virtual_detents_ += detents; }
 void DevicePorts::press_switch(float seconds) { virtual_press_s_ = seconds; }
 
+// A pad that has been held far longer than a person holds one.
+//
+// This began as a check at startup, and startup is the one moment it cannot be
+// made at: a TTP223 calibrates itself against its surroundings when it powers
+// up, and its output is not meaningful until that finishes about half a second
+// later. Sampling at 255 ms reported the right-hand pad as stuck on a board
+// whose pads were all fine — a diagnostic that cries wolf is worse than none,
+// because the next real one gets ignored.
+//
+// Duration is the honest signal instead. Nobody rests a finger on a panel for
+// half a minute, so a pad that has been high that long is a fault: an
+// active-low jumper, a latched toggle-mode module, an output tied to 3V3. It
+// catches the same faults the boot check was meant to, plus the latching one
+// it could not see, and it cannot be fooled by a module that has not settled.
+//
+// Said once per episode. A stuck pad is stuck for as long as the panel is
+// powered, and a warning every frame would bury everything else in the log.
+void DevicePorts::watch_stuck_pads(const bool* touch) {
+  static const char* kNames[ui::kZones] = {"left", "middle", "right"};
+  const int64_t now = esp_timer_get_time();
+  for (int i = 0; i < ui::kZones; ++i) {
+    if (!touch[i]) {
+      pad_since_us_[i] = 0;
+      pad_warned_[i] = false;
+      continue;
+    }
+    if (pad_since_us_[i] == 0) pad_since_us_[i] = now;
+    if (pad_warned_[i]) continue;
+    if (now - pad_since_us_[i] < 30LL * 1000 * 1000) continue;
+    pad_warned_[i] = true;
+    ESP_LOGW(TAG,
+             "touch pad %s has read held for 30 s — check the TTP223 jumpers "
+             "(momentary, active high) before the wiring",
+             kNames[i]);
+  }
+}
+
 void DevicePorts::read_raw(ui::RawInput* out) {
   if (pins::kTouchFitted) {
     out->touch[0] = gpio_get_level(pins::kTouchLeft) != 0;
     out->touch[1] = gpio_get_level(pins::kTouchMiddle) != 0;
     out->touch[2] = gpio_get_level(pins::kTouchRight) != 0;
+    watch_stuck_pads(out->touch);
   }
   // A web button and a soldered pad are the same thing from here up.
   pads_.apply(out->touch, ui::kZones);

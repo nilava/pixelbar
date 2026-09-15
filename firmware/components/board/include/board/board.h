@@ -106,6 +106,12 @@ class DevicePorts : public ui::Ports {
   const char* net_text_ = "";
   float ota_ = -1.0f;
   uint32_t passkey_ = 0;
+  // How long each pad has read held, and whether that has been reported.
+  // See watch_stuck_pads: a boot-time snapshot cannot tell a faulty pad from
+  // a TTP223 that has not finished calibrating.
+  void watch_stuck_pads(const bool* touch);
+  int64_t pad_since_us_[ui::kZones] = {0};
+  bool pad_warned_[ui::kZones] = {false};
   double uptime_s_ = 0.0;
 };
 
