@@ -51,6 +51,15 @@ class DevicePorts : public ui::Ports {
   bool take_draw(ui::DrawPayload* out) override;
   void set_passkey(uint32_t k) { passkey_ = k; }
 
+  // The magnitude of the last acceleration read, or negative when there is no
+  // sensor. At rest this is gravity, so a figure that is not about 1.00 means
+  // the scaling or the wiring is wrong — which is invisible any other way
+  // until a gesture quietly fails to fire.
+  float last_g() const { return last_g_; }
+  // sqrt(ax^2 + ay^2) — what the flat/upright test is made on. Upright this is
+  // gravity and flat it is nothing, so the two states are one glance apart.
+  float last_plane() const { return last_plane_; }
+
   int paired_count() override;
   const char* paired_name(int index) override;
   void begin_pairing() override;
@@ -106,6 +115,8 @@ class DevicePorts : public ui::Ports {
   const char* net_text_ = "";
   float ota_ = -1.0f;
   uint32_t passkey_ = 0;
+  float last_g_ = -1.0f;
+  float last_plane_ = -1.0f;
   // How long each pad has read held, and whether that has been reported.
   // See watch_stuck_pads: a boot-time snapshot cannot tell a faulty pad from
   // a TTP223 that has not finished calibrating.

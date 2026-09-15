@@ -45,6 +45,13 @@ constexpr gpio_num_t kEncoderSw = GPIO_NUM_0;
 constexpr bool kTouchFitted = true;
 constexpr bool kEncoderFitted = true;
 constexpr bool kEncoderSwitchFitted = true;
-constexpr bool kMotionFitted = false;        // MPU-6050 not fitted
+// The I2C sensor is the one input that can be asked whether it is there.
+//
+// A floating GPIO cannot be told from a real one, which is why the flags above
+// exist at all — but a WHO_AM_I either answers 0x68 or it does not. So this
+// declares the intent to use it, and init_motion decides the fact: if nothing
+// replies, it says so once and the motion layer stays absent rather than
+// reporting a plausible stationary reading forever.
+constexpr bool kMotionFitted = true;
 
 }  // namespace pins

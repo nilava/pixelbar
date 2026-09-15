@@ -1,10 +1,12 @@
 #include "board/board.h"
 
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <ctime>
 
 #include "driver/gpio.h"
+#include "driver/i2c_master.h"
 #include "hal/gpio_ll.h"
 #include "esp_attr.h"
 #include "esp_check.h"
@@ -104,6 +106,133 @@ esp_err_t init_touch() {
   return gpio_config(&t);
 }
 
+// -------------------------------------------------------------- motion
+//
+// An MPU-6050 on I²C, read once a frame for its accelerometer only. The gyro
+// is powered but unused: nothing above this asks for rotation rate, and the
+// three gestures that exist — a knock on the case, a shake, and being laid
+// flat — all fall out of the acceleration vector alone.
+//
+// Range is ±4 g rather than the ±2 g default, and that is a consequence of the
+// thresholds rather than a preference. tap_g and shake_g are *jolts* — changes
+// in the magnitude of the vector, 1.2 g and 1.8 g — and the panel is sitting at
+// 1 g before the knock arrives, so a shake worth recognising takes the
+// instantaneous magnitude close to 3 g. At ±2 g that clips, and a clipped peak
+// reads as a smaller jolt than it was: the harder you hit it, the less it would
+// notice.
+constexpr uint8_t kMpuAddr = 0x68;
+// Which part actually answered.
+//
+// The board fitted here reports 0x70, which is an MPU-6500 — a great many
+// modules sold as "GY-521 / MPU-6050" carry 6500 silicon, and the two are
+// register-compatible for everything used below. Worth naming rather than
+// waving through: they differ in exactly one place that matters, and a driver
+// that assumed 6050 would configure the accelerometer filter on a register the
+// 6500 does not use for it, leaving the panel listening to the desk.
+constexpr uint8_t kWho6050 = 0x68;
+constexpr uint8_t kWho6500 = 0x70;
+constexpr uint8_t kWho9250 = 0x71;
+constexpr uint8_t kRegSmplrtDiv = 0x19;
+constexpr uint8_t kRegConfig = 0x1A;
+constexpr uint8_t kRegAccelConfig = 0x1C;
+// MPU-6500 and 9250 only. On those parts CONFIG's DLPF filters the gyro and
+// temperature alone and the accelerometer has its own; on the 6050 one filter
+// serves both and 0x1D is not this register, so it is written only when the
+// part that has it says so.
+constexpr uint8_t kRegAccelConfig2 = 0x1D;
+constexpr uint8_t kRegAccelXoutH = 0x3B;
+constexpr uint8_t kRegPwrMgmt1 = 0x6B;
+constexpr uint8_t kRegWhoAmI = 0x75;
+// ±4 g, so 32768 counts over 4 g.
+constexpr float kAccelLsbPerG = 8192.0f;
+
+i2c_master_bus_handle_t g_i2c_bus = nullptr;
+i2c_master_dev_handle_t g_mpu = nullptr;
+// Whether the sensor answered. Distinct from pins::kMotionFitted, which is
+// what the build was *told*: a device that has been declared and does not
+// reply must be absent rather than wrong, for the same reason an unfitted pin
+// is never read. It also stops a missing sensor costing a bus timeout every
+// frame, which would show up as the frame rate collapsing rather than as
+// anything to do with motion.
+bool g_mpu_ok = false;
+
+esp_err_t mpu_write(uint8_t reg, uint8_t val) {
+  const uint8_t buf[2] = {reg, val};
+  return i2c_master_transmit(g_mpu, buf, sizeof(buf), 100);
+}
+
+esp_err_t mpu_read(uint8_t reg, uint8_t* out, size_t n) {
+  return i2c_master_transmit_receive(g_mpu, &reg, 1, out, n, 100);
+}
+
+esp_err_t init_motion() {
+  if (!pins::kMotionFitted) return ESP_OK;
+
+  i2c_master_bus_config_t bus = {};
+  bus.i2c_port = I2C_NUM_0;
+  bus.sda_io_num = pins::kI2cSda;
+  bus.scl_io_num = pins::kI2cScl;
+  bus.clk_source = I2C_CLK_SRC_DEFAULT;
+  bus.glitch_ignore_cnt = 7;
+  // The GY-521 carries its own pull-ups. Enabling the internal ones as well is
+  // harmless and is what keeps the bus defined if a bare chip is used instead.
+  bus.flags.enable_internal_pullup = true;
+  ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus, &g_i2c_bus), TAG, "i2c bus");
+
+  i2c_device_config_t dev = {};
+  dev.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+  dev.device_address = kMpuAddr;
+  dev.scl_speed_hz = 400000;
+  ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(g_i2c_bus, &dev, &g_mpu), TAG,
+                      "i2c device");
+
+  // Who is there, before trusting anything it says. A wrong or absent answer
+  // is reported and then left alone; the panel works without motion and the
+  // settings tree already has a switch for turning it off.
+  uint8_t who = 0;
+  esp_err_t err = mpu_read(kRegWhoAmI, &who, 1);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "no MPU-6050 on I2C (SDA %d, SCL %d): %s — motion is off",
+             pins::kI2cSda, pins::kI2cScl, esp_err_to_name(err));
+    return ESP_OK;
+  }
+  const char* part = nullptr;
+  if (who == kWho6050) part = "MPU-6050";
+  else if (who == kWho6500) part = "MPU-6500";
+  else if (who == kWho9250) part = "MPU-9250";
+  if (!part) {
+    ESP_LOGW(TAG,
+             "I2C device answered WHO_AM_I 0x%02X, which is none of the parts "
+             "this driver knows — motion is off",
+             who);
+    return ESP_OK;
+  }
+
+  // Out of sleep, which is where it powers up. Clocked from the gyro's X PLL
+  // rather than the internal oscillator: it is the manufacturer's advice and
+  // costs nothing, since the gyro is running either way.
+  ESP_RETURN_ON_ERROR(mpu_write(kRegPwrMgmt1, 0x01), TAG, "wake");
+  // DLPF at 44 Hz. The panel is a light source bolted to a desk that people
+  // type on, and without this the accelerometer faithfully reports the
+  // keyboard.
+  ESP_RETURN_ON_ERROR(mpu_write(kRegConfig, 0x03), TAG, "dlpf");
+  // 1 kHz / (1 + 9) = 100 Hz, which is the render loop's rate. Sampling faster
+  // than it is read only means reading stale numbers from a deeper queue.
+  ESP_RETURN_ON_ERROR(mpu_write(kRegSmplrtDiv, 9), TAG, "rate");
+  ESP_RETURN_ON_ERROR(mpu_write(kRegAccelConfig, 0x08), TAG, "range");
+  if (who != kWho6050) {
+    // 41 Hz on the accelerometer's own filter. Without this the CONFIG write
+    // above filters only the gyro, and the acceleration this actually reads
+    // comes through unfiltered at 1 kHz — which on a panel bolted to a desk
+    // people type on is a steady supply of knocks that never happened.
+    ESP_RETURN_ON_ERROR(mpu_write(kRegAccelConfig2, 0x03), TAG, "accel dlpf");
+  }
+
+  g_mpu_ok = true;
+  ESP_LOGI(TAG, "%s ready at 0x%02X, +/-4 g at 100 Hz", part, kMpuAddr);
+  return ESP_OK;
+}
+
 // ------------------------------------------------------------- settings
 //
 // One blob under one key. Forty separate keys would mean forty defaulted reads
@@ -127,6 +256,7 @@ esp_err_t init() {
 
   ESP_RETURN_ON_ERROR(init_touch(), TAG, "touch");
   ESP_RETURN_ON_ERROR(init_encoder(), TAG, "encoder");
+  ESP_RETURN_ON_ERROR(init_motion(), TAG, "motion");
 
   // Every input pin, as it rests, once. This is the line to read first when the
   // panel does something nobody asked for.
@@ -267,10 +397,43 @@ void DevicePorts::read_raw(ui::RawInput* out) {
   out->encoder_detents =
       (pins::kEncoderFitted ? g_detents : 0) + virtual_detents_;
 
-  // The MPU-6050 is not fitted, and saying so is better than reporting a
-  // plausible stationary reading: motion_valid false makes the whole motion
-  // layer absent rather than wrong.
-  out->motion_valid = false;
+  // Saying nothing is better than reporting a plausible stationary reading:
+  // motion_valid false makes the whole motion layer absent rather than wrong.
+  if (g_mpu_ok) {
+    uint8_t raw[6];
+    if (mpu_read(kRegAccelXoutH, raw, sizeof(raw)) == ESP_OK) {
+      // Big-endian signed, three axes.
+      const int16_t x = static_cast<int16_t>((raw[0] << 8) | raw[1]);
+      const int16_t y = static_cast<int16_t>((raw[2] << 8) | raw[3]);
+      const int16_t z = static_cast<int16_t>((raw[4] << 8) | raw[5]);
+      // Straight through, in sensor axes. Which signed axis lies in the panel's
+      // plane depends on how the board is mounted in the case, and that is not
+      // known until there is a case: the recogniser is written against the
+      // magnitude and the in-plane component for exactly that reason, so this
+      // mapping can be corrected later without anything above it moving.
+      out->ax = static_cast<float>(x) / kAccelLsbPerG;
+      out->ay = static_cast<float>(y) / kAccelLsbPerG;
+      out->az = static_cast<float>(z) / kAccelLsbPerG;
+      out->motion_valid = true;
+      last_g_ = std::sqrt(out->ax * out->ax + out->ay * out->ay +
+                          out->az * out->az);
+      // The component the flat-detection actually uses. Which signed axis lies
+      // in the panel's plane depends on how the board ends up mounted, and
+      // getting it backwards would have the panel decide it was lying down
+      // while standing upright — then sleep, a second later, for no visible
+      // reason. Printing it is how that gets caught before a case exists.
+      last_plane_ = std::sqrt(out->ax * out->ax + out->ay * out->ay);
+    } else {
+      // A sensor that stops answering mid-run goes absent rather than frozen.
+      // A held reading would be taken for "laid flat" and put the panel to
+      // sleep, which is the worst way to find out a wire came off.
+      out->motion_valid = false;
+      last_g_ = -1.0f;
+      last_plane_ = -1.0f;
+    }
+  } else {
+    out->motion_valid = false;
+  }
 }
 
 uint8_t DevicePorts::raw_pads() const {

@@ -5,9 +5,8 @@ The authoritative copy of the GPIO numbers is
 [`firmware/main/pins.h`](../firmware/main/pins.h) — this file explains them.
 
 > The panel is built and its mapping is confirmed. The encoder is soldered
-> directly, and so are the three touch pads. The accelerometer is not fitted —
-> until it is, `motion_valid` stays false and the tilt gestures are absent
-> rather than guessed at.
+> directly, and so are the three touch pads. The accelerometer is fitted too,
+> on I²C.
 >
 > The web page still drives the pads, and always will: a web button and a
 > soldered pad arrive at the recogniser as the same pin levels, so the remote
@@ -22,9 +21,9 @@ The authoritative copy of the GPIO numbers is
 | Touch, left | 3 | TTP223 `OUT`, active high, momentary |
 | Touch, middle | 4 | |
 | Touch, right | 5 | |
-| I²C `SDA` | 6 | MPU-6050 |
+| I²C `SDA` | 6 | MPU-6050 / MPU-6500 |
 | I²C `SCL` | 7 | |
-| MPU-6050 `INT` | 1 | optional; wake on tap |
+| MPU `INT` | 1 | optional, not used; the sensor is polled at frame rate |
 | Encoder `A` | 20 | 10 kΩ pull-up to 3V3 |
 | Encoder `B` | 21 | 10 kΩ pull-up to 3V3 |
 | Encoder switch | 0 | to ground; 10 kΩ pull-up to 3V3 |
@@ -222,3 +221,37 @@ Several grounds and several 5 V feeds meet at the same points. Solder them
 together and cover the joint with heat-shrink rather than using a terminal
 block — there is no room in the compartment for one, and the model's wire
 channels are sized for bare wire.
+
+## The accelerometer is probably not an MPU-6050
+
+The board fitted here answers `WHO_AM_I` with **0x70**, which is an **MPU-6500**.
+A great many modules sold as "GY-521 / MPU-6050" carry 6500 silicon, and the
+label on the listing is not evidence either way. The driver accepts 0x68
+(6050), 0x70 (6500) and 0x71 (9250), names the one it found in the log, and
+refuses to configure anything it does not recognise.
+
+They are register-compatible for everything used here — wake, sample rate,
+range, and the six accelerometer bytes at `0x3B` — with **one** exception that
+matters. On the 6050, the `CONFIG` (0x1A) low-pass filter serves the gyro *and*
+the accelerometer. On the 6500 and 9250 it serves only the gyro, and the
+accelerometer has its own filter in `ACCEL_CONFIG2` (0x1D). A driver written
+for the 6050 and run on a 6500 therefore reads acceleration **unfiltered at
+1 kHz** — which, on a panel bolted to a desk that someone types on, is a steady
+supply of knocks that never happened. `0x1D` is written only when the part that
+has it identifies itself.
+
+Range is **±4 g**, not the ±2 g default. `tap_g` and `shake_g` are *jolts* —
+changes in the magnitude of the vector, 1.2 g and 1.8 g — and the panel rests
+at 1 g before the knock lands, so a shake worth recognising takes the
+instantaneous magnitude near 3 g. At ±2 g that clips, and a clipped peak reads
+as a *smaller* jolt than it was: the harder you hit it, the less it notices.
+
+### Checking it
+
+The status line carries `g=` and `plane=`. At rest `g` is gravity, so anything
+that is not about 1.00 means the scaling or the wiring is wrong — this board
+reads 0.97, which is ordinary factory offset on an uncalibrated part. `plane`
+is `sqrt(ax² + ay²)`, the component the flat-versus-upright test is made on:
+standing up it is ~1.00 and laid flat it is ~0. If those are the wrong way
+round the panel will decide it is lying down while standing upright, and then
+sleep a second later for no visible reason.
