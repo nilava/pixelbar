@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -94,7 +95,17 @@ extern "C" void app_main(void) {
   // Which pins actually move when you turn the knob. Resting levels cannot
   // tell a floating pin from a correctly pulled-up one; edges can.
   constexpr bool kPinScan = false;
-  if (kPinScan) board::scan_begin();
+  if (kPinScan) {
+    board::scan_begin();
+    // What the silicon thinks these pins are, rather than what the code asked
+    // for. This is the line that cleared the firmware of the dead encoder: it
+    // showed GPIO20 and 21 as plain GPIO inputs, pulled up, any-edge interrupt
+    // armed — leaving nowhere for the fault to be except the wiring, which is
+    // where it was.
+    ESP_LOGW(TAG, "pin configuration for the encoder (0, 20, 21) and a pad (3):");
+    gpio_dump_io_configuration(
+        stdout, (1ULL << 0) | (1ULL << 3) | (1ULL << 20) | (1ULL << 21));
+  }
 
   const int64_t boot_us = esp_timer_get_time();
   bool mapping = kMapTestSeconds > 0;

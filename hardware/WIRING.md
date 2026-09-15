@@ -119,13 +119,36 @@ five pins, no power pin, and **no resistors**. There is no `+` to connect and
 nothing is lost by its absence: the shared node that caused the fault above is
 removed along with the board it lived on.
 
+> **`C` goes to GND, and to nothing else.** This is the one thing to get right,
+> and the section above is why it is easy to get wrong: on a KY-040 you connect
+> `+` to **3V3**, and that habit does not carry over. A bare EC11 has no `+`.
+> Its contacts work by pulling a line **down**, so the common must sit at
+> ground. Wire `C` to 3V3 and every contact connects its line to the voltage
+> the pull-ups are already holding it at: nothing moves, the levels read high
+> forever, and all three lines look dead at once while board ground tests
+> perfectly fine. The three resistors go to 3V3; the common does not.
+
 | EC11 pin | Goes to | |
 | --- | --- | --- |
 | `A` | **GPIO20** | quadrature A, **and** 10 kΩ to 3V3 |
-| `C` (common, centre of the three) | GND | |
+| `C` (common, centre of the three) | **GND** | never 3V3 — see above |
 | `B` | **GPIO21** | quadrature B, **and** 10 kΩ to 3V3 |
 | switch pin 1 | **GPIO0** | **and** 10 kΩ to 3V3 |
-| switch pin 2 | GND | |
+| switch pin 2 | **GND** | never 3V3, for the same reason |
+
+### Finding the pins on the part
+
+Do not trust a picture; two minutes with a multimeter on continuity settles it
+and costs less than desoldering.
+
+- The **two pins on their own side** are the push switch. They short to each
+  other while the shaft is pressed and are open otherwise. No polarity.
+- The **three pins on the other side** are `A`, `C`, `B`, with `C` in the
+  centre. Turning the shaft slowly makes and breaks `A`–`C` and `B`–`C` in
+  turn; `A`–`B` never closes on its own. If the middle pin is the one that
+  shows continuity to *both* outer pins as you turn, that is `C`.
+- Some EC11s also have **mounting lugs** on the body. They are mechanical and
+  connect to nothing.
 
 ### Fit the three 10 kΩ pull-ups
 

@@ -290,27 +290,32 @@ uint16_t g_scan_edges[kScanCount] = {0};
 }  // namespace
 
 void scan_begin() {
-  for (int i = 0; i < kScanCount; ++i) {
-    // GPIO8 and 9 are strapping pins and GPIO2 is one too; they are read here
-    // but never configured, so the scan cannot change how the board boots.
-    if (kScanPins[i] == GPIO_NUM_2 || kScanPins[i] == GPIO_NUM_8 ||
-        kScanPins[i] == GPIO_NUM_9) {
-      continue;
-    }
-    gpio_config_t c = {};
-    c.pin_bit_mask = 1ULL << kScanPins[i];
-    c.mode = GPIO_MODE_INPUT;
-    c.pull_up_en = GPIO_PULLUP_ENABLE;
-    c.intr_type = GPIO_INTR_DISABLE;
-    gpio_config(&c);
-  }
+  // Reads, and configures nothing.
+  //
+  // It used to reconfigure every pin it watched, which made it a diagnostic
+  // that broke what it measured: a zeroed gpio_config_t means
+  // GPIO_INTR_DISABLE, so switching the scan on quietly turned off the
+  // encoder's own edge interrupt, and pull_up_en overrode the pull-downs the
+  // touch pads need. The one thing this must never do is change the behaviour
+  // being investigated.
+  //
+  // Everything here is already configured by init() — the pads, the encoder,
+  // the I2C bus — except GPIO1, 2, 8 and 9, which nothing owns. GPIO2, 8 and 9
+  // are strapping pins and are left alone on principle; GPIO1 is the only one
+  // that needs an input stage of its own.
+  gpio_config_t c = {};
+  c.pin_bit_mask = 1ULL << GPIO_NUM_1;
+  c.mode = GPIO_MODE_INPUT;
+  c.pull_up_en = GPIO_PULLUP_ENABLE;
+  c.intr_type = GPIO_INTR_DISABLE;
+  gpio_config(&c);
+
   for (int i = 0; i < kScanCount; ++i) {
     g_scan_last[i] = gpio_get_level(kScanPins[i]) ? 1 : 0;
     g_scan_edges[i] = 0;
   }
   g_scan_on = true;
 }
-
 void scan_poll() {
   if (!g_scan_on) return;
   for (int i = 0; i < kScanCount; ++i) {
