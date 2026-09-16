@@ -20,6 +20,7 @@
 
 #include "esp_log.h"
 #include "esp_random.h"
+#include "hid.h"
 #include "esp_nimble_hci.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
@@ -316,6 +317,7 @@ static int on_gap(struct ble_gap_event* ev, void* arg) {
     case BLE_GAP_EVENT_CONNECT:
       if (ev->connect.status == 0) {
         s_conn = ev->connect.conn_handle;
+        hid_set_conn(s_conn);
         ESP_LOGI(TAG, "connected");
         // Ask for a slower connection, immediately.
         //
@@ -353,6 +355,8 @@ static int on_gap(struct ble_gap_event* ev, void* arg) {
       s_conn_token[0] = '\0';
       s_state_subscribed = false;
       s_encrypted = false;
+      hid_on_disconnect();
+      hid_set_conn(BLE_HS_CONN_HANDLE_NONE);
       ESP_LOGI(TAG, "disconnected (%d)", ev->disconnect.reason);
       advertise();
       return 0;
@@ -396,6 +400,8 @@ static int on_gap(struct ble_gap_event* ev, void* arg) {
       if (ev->subscribe.attr_handle == s_state_handle) {
         s_state_subscribed = ev->subscribe.cur_notify != 0;
       }
+      hid_on_subscribe(ev->subscribe.attr_handle,
+                       ev->subscribe.cur_notify != 0);
       return 0;
 
     case BLE_GAP_EVENT_REPEAT_PAIRING:
@@ -433,6 +439,22 @@ static void advertise(void) {
   fields.name = (uint8_t*)s_name;
   fields.name_len = strlen(s_name);
   fields.name_is_complete = 1;
+  // The HID service, in the advertisement rather than the scan response.
+  //
+  // This is what makes an operating system offer the panel as a media remote
+  // without anything installed: hosts filter for 0x1812 while scanning and
+  // decide from the appearance what to call it. Sixteen bits fit where the
+  // panel's own 128-bit service did not — four bytes against eighteen — so
+  // both can be advertised, one in each packet.
+  static const ble_uuid16_t kHidUuid = BLE_UUID16_INIT(0x1812);
+  fields.uuids16 = (ble_uuid16_t*)&kHidUuid;
+  fields.num_uuids16 = 1;
+  // Incomplete on purpose: the panel's own service is a 128-bit UUID in the
+  // scan response, so this list is not the whole story and saying it were
+  // would be a lie a host could act on.
+  fields.uuids16_is_complete = 0;
+  fields.appearance = 0x03C0;  // Generic HID
+  fields.appearance_is_present = 1;
   if (ble_gap_adv_set_fields(&fields) != 0) ESP_LOGW(TAG, "advertisement rejected");
 
   struct ble_hs_adv_fields rsp = {0};
@@ -514,6 +536,12 @@ esp_err_t ble_start(const char* name) {
 
   ble_svc_gap_init();
   ble_svc_gatt_init();
+  // The media remote, registered alongside the panel's own service. Both live
+  // on one GATT table and one connection: a host that pairs for either gets
+  // both, which is why this costs no second bond and no second ceremony.
+  if (hid_register() != 0) {
+    ESP_LOGW(TAG, "HID service not registered; media keys unavailable");
+  }
   if (ble_gatts_count_cfg(kServices) != 0 || ble_gatts_add_svcs(kServices) != 0) {
     ESP_LOGE(TAG, "could not register the service");
     return ESP_FAIL;

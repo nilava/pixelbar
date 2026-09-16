@@ -875,6 +875,15 @@ class TestPorts : public Ports {
   void forget_hosts() override { ++forget_host_calls; }
   void forget_network() override { ++forget_net_calls; }
   void factory_reset() override { ++factory_calls; }
+  void media(ui::Ports::MediaKey k) override {
+    media_keys[media_count < 16 ? media_count : 15] = k;
+    ++media_count;
+  }
+  bool media_ready() override { return media_live; }
+  ui::Ports::MediaKey media_keys[16] = {};
+  int media_count = 0;
+  bool media_live = true;
+
   bool wifi_enabled() override { return wifi_on; }
   void set_wifi_enabled(bool on) override { wifi_on = on; ++wifi_writes; }
   bool wifi_on = true;
@@ -1315,6 +1324,78 @@ void test_app_adjust() {
     r.run(0.2f);
     CHECK_EQ(static_cast<int>(r.app.screen()),
              static_cast<int>(panel::Screen::WifiFailed));
+  }
+
+  CASE("the knob is a volume dial on the media screen");
+  {
+    // The one screen where turning does not move between views. It is entered
+    // like the status picker — a shortcut, not a group — so the knob is at
+    // depth two and adjusting rather than navigating.
+    AppRig r;
+    r.enter("PLAY");
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::Media));
+
+    r.turn(1);
+    CHECK_EQ(r.ports.media_count, 1);
+    CHECK(r.ports.media_keys[0] == ui::Ports::MediaKey::VolUp);
+
+    r.turn(-1);
+    CHECK_EQ(r.ports.media_count, 2);
+    CHECK(r.ports.media_keys[1] == ui::Ports::MediaKey::VolDown);
+
+    // And it stays put: turning here must not walk the home views the way
+    // every other screen at rest does.
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::Media));
+
+    r.press();
+    CHECK_EQ(r.ports.media_count, 3);
+    CHECK(r.ports.media_keys[2] == ui::Ports::MediaKey::PlayPause);
+  }
+
+  CASE("one detent is one volume step, however fast the knob is turned");
+  {
+    // No acceleration, unlike every other value here. The host decides how
+    // much its own step is worth, and multiplying by our idea of a fast turn
+    // would send a burst that arrives faster than any host applies it.
+    AppRig r;
+    r.enter("PLAY");
+    r.turn(3);
+    CHECK_EQ(r.ports.media_count, 3);
+    for (int i = 0; i < 3; ++i)
+      CHECK(r.ports.media_keys[i] == ui::Ports::MediaKey::VolUp);
+  }
+
+  CASE("the pads are the transport, but only on the media screen");
+  {
+    AppRig r;
+    r.enter("PLAY");
+    r.tap(0);
+    r.tap(2);
+    CHECK_EQ(r.ports.media_count, 2);
+    CHECK(r.ports.media_keys[0] == ui::Ports::MediaKey::Prev);
+    CHECK(r.ports.media_keys[1] == ui::Ports::MediaKey::Next);
+
+    // Off that screen the left pad is the status toggle it has always been,
+    // and sends no media key at all.
+    AppRig h;
+    h.tap(0);
+    CHECK_EQ(h.ports.media_count, 0);
+  }
+
+  CASE("a media screen with nothing listening says so");
+  {
+    // A volume dial connected to nothing looks exactly like one that works.
+    AppRig r;
+    r.ports.media_live = false;
+    r.enter("PLAY");
+    CHECK(!r.app.state().media_ready);
+
+    AppRig l;
+    l.ports.media_live = true;
+    l.enter("PLAY");
+    CHECK(l.app.state().media_ready);
   }
 
   CASE("the radio can be switched off from the knob");

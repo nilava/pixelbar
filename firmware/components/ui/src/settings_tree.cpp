@@ -32,6 +32,7 @@ constexpr RGB kClock(200, 200, 255);
 constexpr RGB kNet(60, 200, 255);
 constexpr RGB kLink(120, 140, 255);
 constexpr RGB kSystem(255, 60, 40);
+constexpr RGB kMedia(255, 90, 200);
 
 #define ROW(icon, label, colour) {&panel::icon, label, colour, false}
 #define SPIN(icon, label, colour) {&panel::icon, label, colour, true}
@@ -161,6 +162,9 @@ const SettingGroup kGroups[] = {
     // HOST rather than LINK: what this group manages is the machines allowed
     // to drive the panel, and "link" named the transport instead of the thing.
     GROUP(ROW(kIconLock, "HOST", kLink), kLinkItems),
+    // A shortcut rather than a group: there is nothing to configure, only a
+    // screen to be on. Same shape as the status picker, and the same reason.
+    SHORTCUT(ROW(kIconSunRays, "PLAY", kMedia), panel::Screen::Media),
     GROUP(ROW(kIconWarning, "SYS", kSystem), kSystemItems),
 };
 const int kGroupCount = static_cast<int>(sizeof(kGroups) / sizeof(kGroups[0]));

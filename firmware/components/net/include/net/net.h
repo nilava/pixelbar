@@ -134,6 +134,23 @@ void net_publish_frame(const uint8_t* rgb, int count);
 // at startup would defeat the point of rollback entirely.
 void net_mark_healthy(void);
 
+// The media keys, as a Bluetooth remote.
+//
+// Deliberately not part of the command queue: this does not touch the model,
+// it leaves the device entirely. The values match hid_key_t.
+typedef enum {
+  NET_MEDIA_PLAY_PAUSE = 1 << 0,
+  NET_MEDIA_NEXT = 1 << 1,
+  NET_MEDIA_PREV = 1 << 2,
+  NET_MEDIA_VOL_UP = 1 << 3,
+  NET_MEDIA_VOL_DOWN = 1 << 4,
+  NET_MEDIA_MUTE = 1 << 5,
+} net_media_key_t;
+
+void net_media(net_media_key_t key);
+// Whether a host is listening for media keys.
+bool net_media_ready(void);
+
 // The radio, switched from the panel's own settings or over Bluetooth.
 //
 // Off means off: the station is stopped, nothing retries, and the six-failure

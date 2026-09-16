@@ -66,6 +66,8 @@ class DevicePorts : public ui::Ports {
   void forget_hosts() override;
   void forget_network() override;
   void factory_reset() override;
+  void media(ui::Ports::MediaKey key) override;
+  bool media_ready() override;
   bool wifi_enabled() override;
   void set_wifi_enabled(bool on) override;
 

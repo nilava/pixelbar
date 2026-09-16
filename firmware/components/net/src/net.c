@@ -20,6 +20,7 @@
 #include "creds.h"
 #include "auth.h"
 #include "ble.h"
+#include "hid.h"
 #include "discovery.h"
 #include "ota.h"
 #include "freertos/FreeRTOS.h"
@@ -1272,6 +1273,9 @@ uint32_t net_passkey(void) {
   return ble_code ? ble_code : auth_pairing_code();
 }
 void net_mark_healthy(void) { ota_mark_healthy(); }
+
+void net_media(net_media_key_t key) { hid_tap((hid_key_t)key); }
+bool net_media_ready(void) { return hid_connected(); }
 
 bool net_wifi_enabled(void) { return s_wifi_wanted; }
 

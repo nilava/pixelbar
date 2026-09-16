@@ -120,6 +120,7 @@ const char* screen_name(Screen s) {
     case Screen::WifiInfo: return "wifiinfo";
     case Screen::WifiFailed: return "wififailed";
     case Screen::WifiOff: return "wifioff";
+    case Screen::Media: return "media";
     case Screen::OtaProgress: return "ota";
     case Screen::Pairing: return "pairing";
     case Screen::Draw: return "draw";
@@ -772,6 +773,55 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       const float drift = a.phase(60.0f) * kWidth;
       draw_icon_aa(fb, drift - 4.0f, 0.0f, kIconMoon, moon);
       draw_icon_aa(fb, drift - 4.0f + kWidth, 0.0f, kIconMoon, moon);
+      break;
+    }
+
+    case Screen::Media: {
+      // A speaker and two arcs, lit only while a host is listening.
+      //
+      // The arcs are the tell: a volume dial connected to nothing looks
+      // exactly like one that is working, which is the failure this screen has
+      // to make visible before somebody spends a minute turning a knob at a
+      // Mac that never paired.
+      const RGB live(120, 200, 255);
+      const RGB dead(90, 90, 100);
+      const RGB c = ui.media_ready ? live : dead.scaled(90);
+
+      // The cone, five columns of a growing wedge.
+      for (int x = 0; x < 3; ++x) {
+        const int half = x + 1;
+        for (int dy = -half; dy <= half; ++dy) fb.set(2 + x, 3 + dy, c);
+      }
+
+      if (ui.media_ready) {
+        // Two arcs coming off it, brightening on the way to whichever end the
+        // knob just moved.
+        const float k = ui.media_flash;
+        for (int arc = 0; arc < 2; ++arc) {
+          const int r = 2 + arc * 2;
+          const uint8_t lit = static_cast<uint8_t>(
+              (60.0f + 195.0f * (ui.media_dir != 0 ? k : 0.0f)));
+          for (int i = -r; i <= r; ++i) {
+            const int y = 3 + i;
+            if (y < 0 || y >= kHeight) continue;
+            const int dx = static_cast<int>(
+                std::sqrt((float)(r * r - i * i)) + 0.5f);
+            fb.set(6 + arc * 2 + dx / 4, y, live.scaled(lit));
+          }
+        }
+      }
+
+      // The direction of the last thing sent, as a rail that fills from the
+      // middle outwards. Nothing to do with the host's actual volume, which
+      // the panel has no way of knowing — this says "that went out", and
+      // guessing at a level it cannot read would be a display that lies.
+      if (ui.media_flash > 0.0f && ui.media_dir != 0) {
+        const int span = static_cast<int>(ui.media_flash * 7.0f + 0.5f);
+        for (int i = 0; i < span; ++i) {
+          const int x = ui.media_dir > 0 ? 16 + i : 15 - i;
+          if (x >= 0 && x < kWidth) fb.set(x, 7, live.scaled(160));
+        }
+      }
       break;
     }
 

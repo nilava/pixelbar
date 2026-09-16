@@ -108,6 +108,21 @@ struct Ports {
   // current one, so a new field there would reset every device to defaults.
   // The device keeps this in its own NVS key, the way the credentials and the
   // tokens already are.
+  // The panel as a media remote. Mirrors net_media_key_t; declared here
+  // rather than included, for the same reason NetMode is.
+  enum class MediaKey : uint8_t {
+    PlayPause = 1 << 0,
+    Next = 1 << 1,
+    Prev = 1 << 2,
+    VolUp = 1 << 3,
+    VolDown = 1 << 4,
+    Mute = 1 << 5,
+  };
+  virtual void media(MediaKey key) {}
+  // Whether anything is listening. The screen says so, because a volume dial
+  // that turns and does nothing is worse than one that admits it.
+  virtual bool media_ready() { return false; }
+
   virtual bool wifi_enabled() { return true; }
   virtual void set_wifi_enabled(bool on) {}
 

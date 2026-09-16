@@ -102,7 +102,8 @@ enum class Screen : uint8_t {
   WifiConnecting,  // trying the credentials someone just typed
   WifiInfo,
   WifiFailed,      // that network said no, and why
-  WifiOff,         // the radio is switched off, deliberately        // the address, so you can reach the page from your own network
+  WifiOff,         // the radio is switched off, deliberately
+  Media,           // the knob as a volume dial        // the address, so you can reach the page from your own network
   OtaProgress,     // a firmware update is being written; do not unplug it
   Pairing,         // the six digits a Bluetooth host must be told
   Draw,            // whatever a host asked the panel to show
@@ -201,6 +202,13 @@ struct UiState {
   // pointing. Defaulting to no is the whole point.
   // Why a join was refused. Borrowed, like net_text.
   const char* net_error = "";
+
+  // The media screen: whether a host is listening, and a nudge to animate
+  // when a key is sent. The nudge decays in the model, so the panel does not
+  // need to know how long ago it happened.
+  bool media_ready = false;
+  float media_flash = 0.0f;   // 1 at the press, falling to 0
+  int8_t media_dir = 0;       // -1 down, +1 up, 0 for play/pause
 
   const char* confirm_label = "";
   bool confirm_yes = false;

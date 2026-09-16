@@ -51,7 +51,15 @@ CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 # flash for the same reason NimBLE was chosen over Bluedroid.
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# Two, since the panel became a media remote.
+#
+# One was right while the only thing that ever connected was the Mac helper.
+# A HID host is a second, independent peer: the phone can hold the media link
+# while the Mac holds the control link, and they are different bonds on
+# different machines. The same Mac doing both still costs one connection —
+# GATT is multiplexed over a single link — so this is the price of the second
+# *device*, not the second service.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
 # Bonds in NVS, and enough of them for a desk.
 #
 # NVS_PERSIST was off — it is off by default — so even with a store configured

@@ -224,6 +224,18 @@ void App::update(float dt_s, double now_s) {
     }
   }
 
+  // The media flourish fades on its own, so the panel needs no memory of when
+  // a key was sent — only how much of the glow is left.
+  if (ui_.media_flash > 0.0f) {
+    ui_.media_flash -= dt_s * 2.5f;
+    if (ui_.media_flash < 0.0f) ui_.media_flash = 0.0f;
+  }
+  // Re-read while the screen is up: a host can connect or walk away while
+  // somebody is standing there, and the arcs are the only thing that says so.
+  if (screen() == panel::Screen::Media && ports_) {
+    ui_.media_ready = ports_->media_ready();
+  }
+
   mgr_.advance(dt_s);
   fl_.tick(now_s);
 
@@ -525,6 +537,11 @@ void App::enter_menu_entry() {
     const SettingGroup& g = kGroups[group_index_];
     if (g.direct != Screen::Count) {
       if (g.direct == Screen::StatusPick) ui_.pick = ui_.status;
+      if (g.direct == Screen::Media && ports_) {
+        ui_.media_ready = ports_->media_ready();
+        ui_.media_flash = 0.0f;
+        ui_.media_dir = 0;
+      }
       push(g.direct, TransitionKind::WipeUp);
       return;
     }
@@ -851,6 +868,23 @@ void App::adjust(int detents, float rate) {
       break;
     }
 
+    case Screen::Media: {
+      // The knob is a volume dial here, and one detent is one step — no
+      // acceleration. The host decides how big its own step is, and
+      // multiplying by our idea of a fast turn would send a burst of keys
+      // that arrive faster than any host applies them.
+      if (detents == 0 || !ports_) break;
+      const int n = detents > 0 ? detents : -detents;
+      for (int i = 0; i < n && i < 8; ++i) {
+        ports_->media(detents > 0 ? Ports::MediaKey::VolUp
+                                  : Ports::MediaKey::VolDown);
+      }
+      ui_.media_dir = detents > 0 ? 1 : -1;
+      ui_.media_flash = 1.0f;
+      ui_.media_ready = ports_->media_ready();
+      break;
+    }
+
     case Screen::Confirm: {
       // Any turn flips the answer. A confirm has two states and no scale, so
       // counting detents would only let a fast sweep land on yes by accident.
@@ -909,6 +943,23 @@ void App::handle(const Event& e, double now_s) {
   switch (e.type) {
     // ---------------------------------------------------------- touch
     case EventType::Tap:
+      // On the media screen the pads are the transport, which is the one place
+      // they mean something other than status and timer. Handled before the
+      // ordinary mapping rather than inside it, so adding a zone later cannot
+      // accidentally inherit a media meaning.
+      if (screen() == Screen::Media) {
+        if (ports_) {
+          switch (static_cast<Zone>(e.which)) {
+            case Zone::Left: ports_->media(Ports::MediaKey::Prev); break;
+            case Zone::Middle: ports_->media(Ports::MediaKey::PlayPause); break;
+            case Zone::Right: ports_->media(Ports::MediaKey::Next); break;
+            default: break;
+          }
+          ui_.media_dir = 0;
+          ui_.media_flash = 1.0f;
+        }
+        break;
+      }
       switch (static_cast<Zone>(e.which)) {
         case Zone::Left:
           set_status(ui_.status == Status::Busy ? Status::Free : Status::Busy);
@@ -980,6 +1031,13 @@ void App::handle(const Event& e, double now_s) {
         }
         go_home();
         set_status(chosen);
+      } else if (screen() == Screen::Media) {
+        if (ports_) {
+          ports_->media(Ports::MediaKey::PlayPause);
+          ui_.media_dir = 0;
+          ui_.media_flash = 1.0f;
+          ui_.media_ready = ports_->media_ready();
+        }
       } else if (screen() == Screen::Confirm) {
         const SettingId pending = pending_action_;
         pending_action_ = SettingId::Count;

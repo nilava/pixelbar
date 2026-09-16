@@ -141,11 +141,20 @@ everything the device stores or is paired with is reachable from the knob.
 | **CLCK** | 12 or 24 hour |
 | **WIFI** | **IP** shows the address, **DROP** forgets the network |
 | **HOST** | **ADD** opens a pairing window, **LIST** shows who is paired, **DROP** forgets them all |
+| **PLAY** | the media remote — jumps straight to it, a shortcut not a group |
 | **SYS** | **WIPE** — tokens, bonds and network, then a restart into setup |
 
 DROP forgets one thing and WIPE forgets everything; the group says what the
 thing is. Every one of them asks first, on a screen that opens on *no* — the
 knob has no undo.
+
+**PLAY** needs no software at all. The panel advertises a Bluetooth HID
+service, so any Mac, iPhone, Windows or Linux machine can pair it as a media
+remote from its own Bluetooth settings and never hear the name Pixelbar. On
+that screen the knob is a volume dial, pressing it is play/pause, and the three
+pads are previous, play/pause and next. The arcs beside the speaker are lit
+only while something is actually listening — a volume dial connected to nothing
+looks exactly like one that works.
 
 **HOST** is the group worth knowing about. The panel is driven over HTTP by
 hosts holding a token, and over Bluetooth by hosts that have bonded; **LIST**
