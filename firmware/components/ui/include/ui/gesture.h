@@ -181,6 +181,10 @@ class Recogniser {
   int8_t swipe_seq_[kZones] = {-1, -1, -1};
   int swipe_len_ = 0;
   float swipe_last_s_ = 0.0f;
+  // Whether all three zones were down together during the sequence being
+  // built. A dragged finger brushes two adjacent pads in passing; it cannot
+  // be on all three, which span 95 mm. See the swipe test in gesture.cpp.
+  bool swipe_palm_ = false;
 
   // The encoder switch, with the same tap/hold shape as a zone.
   float since_turn_s_ = 10.0f;  // how long since the knob last moved

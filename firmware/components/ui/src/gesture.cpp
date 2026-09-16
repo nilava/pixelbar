@@ -45,6 +45,7 @@ void Recogniser::reset() {
   for (int i = 0; i < kZones; ++i) swipe_seq_[i] = -1;
   swipe_len_ = 0;
   swipe_last_s_ = 0.0f;
+  swipe_palm_ = false;
   since_turn_s_ = 10.0f;
   sw_down_ = false;
   sw_raw_ = false;
@@ -133,10 +134,34 @@ int Recogniser::update(const RawInput& in, float dt_s, Event* out, int max) {
   }
   swipe_last_s_ += dt_s;
 
+  // All three zones down at once means this is a hand, not a fingertip.
+  //
+  // A dragged finger does brush two adjacent pads in passing — that is what
+  // the drag test models and it must keep working — but the outer two are
+  // 95 mm apart, so being on all three at the same instant is not something a
+  // finger can do. A palm laid across the panel, reaching past it or on the
+  // way to the knob, does it easily.
+  //
+  // A *slow* two-pad overlap is already handled: the same mask held for
+  // chord_s fires a chord, which consumes both zones and clears the sequence.
+  // What was left was the fast case — a hand sweeping across quickly enough
+  // that no single mask survives long enough to be a chord, arriving as a
+  // perfectly ordered three-zone sequence with the first zone released. That
+  // is indistinguishable from a swipe by order and timing alone, and it is
+  // why a hand passing over the panel changed the view.
+  //
+  // Sticky for the lifetime of the sequence rather than tested at the end: by
+  // the time the third pad arrives the palm has usually left the first, and
+  // the evidence has already gone.
+  if (down_count >= kZones) swipe_palm_ = true;
+
   // Extend the swipe sequence on each new zone.
   for (int i = 0; i < kZones; ++i) {
     if (!went_down[i]) continue;
-    if (swipe_len_ > 0 && swipe_last_s_ > cfg_.swipe_step_s) swipe_len_ = 0;
+    if (swipe_len_ > 0 && swipe_last_s_ > cfg_.swipe_step_s) {
+      swipe_len_ = 0;
+      swipe_palm_ = false;
+    }
     if (swipe_len_ < kZones) swipe_seq_[swipe_len_++] = static_cast<int8_t>(i);
     swipe_last_s_ = 0.0f;
   }
@@ -161,6 +186,7 @@ int Recogniser::update(const RawInput& in, float dt_s, Event* out, int max) {
           for (int i = 0; i < kZones; ++i)
             if (chord_cand_ & (1u << i)) z_[i].consumed = true;
           swipe_len_ = 0;  // a held chord is not the middle of a swipe
+          swipe_palm_ = false;
           n = emit(out, max, n, Event(EventType::Chord, chord_cand_));
         }
       }
@@ -176,12 +202,21 @@ int Recogniser::update(const RawInput& in, float dt_s, Event* out, int max) {
   if (cfg_.enable_swipe && !chord_fired_ && swipe_len_ == kZones) {
     const int8_t a = swipe_seq_[0], b = swipe_seq_[1], c = swipe_seq_[2];
     const bool ordered = (a == 0 && b == 1 && c == 2) || (a == 2 && b == 1 && c == 0);
-    if (ordered && !z_[a].down) {
+    if (ordered && !z_[a].down && !swipe_palm_) {
       for (int i = 0; i < kZones; ++i) z_[i].consumed = true;
       n = emit(out, max, n, Event(EventType::Swipe, 0, a == 0 ? 1 : -1));
       swipe_len_ = 0;
-    } else if (!ordered) {
+      swipe_palm_ = false;
+    } else if (!ordered || swipe_palm_) {
+      // A hand is not a swipe that went wrong, so the zones it covered are
+      // marked used. Without this the palm lifting off the last pad reports a
+      // tap, and the panel does something else nobody asked for — which is
+      // the same complaint in a different costume.
+      if (swipe_palm_) {
+        for (int i = 0; i < kZones; ++i) z_[i].consumed = true;
+      }
       swipe_len_ = 0;
+      swipe_palm_ = false;
     }
   }
 

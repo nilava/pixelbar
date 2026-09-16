@@ -388,6 +388,57 @@ void test_chord_is_not_a_swipe() {
     CHECK_EQ(r.count(EventType::Chord), 1);
   }
 
+  CASE("a hand sweeping across the panel is not a swipe");
+  {
+    // Reported from the bench: reaching over the panel with a flat left hand
+    // changed the view. The hand covers all three pads, and as it travels it
+    // produces a perfectly ordered three-zone sequence with the first zone
+    // released by the time the third arrives — which is the swipe shape
+    // exactly. Order and timing cannot tell them apart; the span can. The
+    // outer pads are 95 mm apart and a fingertip is not.
+    //
+    // Fast enough that no single mask survives chord_s, which is what makes
+    // this the case the chord path does not already catch.
+    Rig r;
+    r.touch(0, true);
+    r.hold_for(0.04f);
+    r.touch(1, true);
+    r.hold_for(0.04f);
+    r.touch(2, true);      // all three: a hand, and nothing else
+    r.hold_for(0.04f);
+    r.touch(0, false);
+    r.hold_for(0.04f);
+    r.touch(1, false);
+    r.hold_for(0.04f);
+    r.touch(2, false);
+    r.hold_for(0.10f);
+    CHECK_EQ(r.count(EventType::Swipe), 0);
+    // And nothing else either. A hand that is not a swipe must not become
+    // three taps instead — the left pad sets your status.
+    CHECK_EQ(r.count(EventType::Tap), 0);
+    CHECK_EQ(r.count(EventType::DoubleTap), 0);
+    CHECK_EQ(r.count(EventType::HoldBegin), 0);
+  }
+
+  CASE("a hand resting across the panel does not wake anything either");
+  {
+    // The slower version of the same thing, which the chord path already
+    // caught. Asserted so that a future change to palm handling cannot break
+    // it quietly.
+    Rig r;
+    r.touch(0, true);
+    r.touch(1, true);
+    r.touch(2, true);
+    r.hold_for(0.60f);     // past hold_s
+    r.touch(0, false);
+    r.touch(1, false);
+    r.touch(2, false);
+    r.hold_for(0.10f);
+    CHECK_EQ(r.count(EventType::Swipe), 0);
+    CHECK_EQ(r.count(EventType::Tap), 0);
+    CHECK_EQ(r.count(EventType::HoldBegin), 0);
+  }
+
   CASE("a drag that brushes two pads together is still a swipe");
   {
     Rig r;
