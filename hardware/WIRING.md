@@ -209,6 +209,43 @@ GND ─────────────────┴── common to every
   through the board-to-board links. At 2.5 A the copper in those links is the
   weak point, and the far board browns out first.
 
+### Wire gauge, which is not a detail
+
+| Run | Gauge | Why |
+| --- | --- | --- |
+| 5 V to each board | **20–22 AWG** | carries the current |
+| GND, every run | **20–22 AWG** | carries the same current *back* |
+| LED data | 26–28 AWG is fine | microamps — but see below |
+| Encoder, touch, I²C | 26–30 AWG is fine | signals only |
+
+28 AWG is 0.081 mm² and about 213 mΩ per metre, against 53 for 22 AWG and 33
+for 20. Its chassis-wiring ampacity is roughly 1.4 A, so at the 2.5 A design
+target it is already past rating before any argument about voltage drop.
+
+**But the drop is not the failure mode that bites first, and this is the part
+worth understanding.** A mostly-dark frame draws a couple of hundred
+milliamps, where even 28 AWG drops single-digit millivolts — so a panel can
+glitch on a dark screen while the arithmetic says the wiring is fine.
+
+The mechanism is the **ground**. A WS2812B decides whether an incoming bit is
+high or low relative to *its own* ground pin. Chain the boards' grounds through
+thin wire and each board sits at a slightly different, constantly moving
+potential from the one before it, because the LEDs' own drivers switch their
+current on and off thousands of times a second and that current comes back
+along exactly this wire. Board 2 sends a clean edge referenced to *its* ground;
+board 3 measures it against *its* ground; the difference is error, and it is
+largest at the end of the chain because that is where the offsets have
+accumulated.
+
+Which is why this shows up as **the last board flickering — including LEDs the
+frame says are off — while the first two are perfect**. It is not a brightness
+problem and it is not a distance problem. Thick wire hides it; thin wire does
+not.
+
+So: ground is not the wire you economise on. It carries every milliamp the 5 V
+wire does, and it doubles as the reference for the only signal in the system
+that matters.
+
 ## Panel chain
 
 Three 65 mm 8×8 WS2812B boards, chained left to right as you face the panel:
