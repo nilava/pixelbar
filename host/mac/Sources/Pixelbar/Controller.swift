@@ -45,6 +45,8 @@ final class Controller: ObservableObject {
     @Published private(set) var micOn = false
     @Published private(set) var camOn = false
     @Published private(set) var reachable = false
+    /// How long to leave an unreachable panel alone between WiFi probes.
+    private let kUnreachableProbeSeconds = 30
     @Published private(set) var pushed: Status?     // what we last set, if anything
     @Published var paused: Bool = Prefs.paused { didSet { Prefs.paused = paused; Task { await settle() } } }
 
@@ -142,13 +144,24 @@ final class Controller: ObservableObject {
     /// covers all three.
     private func poll() async {
         var sinceCalendar = 999
+        var sinceProbe = 999
         while !Task.isCancelled {
             let cam = CameraMonitor.anyRunning()
             if cam != camOn {
                 camOn = cam
                 await evaluate()
             }
-            reachable = await device.state() != nil
+            // Probing WiFi costs a full timeout when it is not working, so a
+            // panel that cannot be reached is not asked every five seconds.
+            // It is still asked — often enough to notice going home, seldom
+            // enough not to spend a third of the loop on a question whose
+            // answer has not changed in an hour.
+            if reachable || sinceProbe >= kUnreachableProbeSeconds {
+                sinceProbe = 0
+                reachable = await device.state() != nil
+            } else {
+                sinceProbe += 5
+            }
             await refreshSetup()
 
             // Once a minute, not every five seconds. A calendar changes on the
@@ -318,20 +331,54 @@ final class Controller: ObservableObject {
     var isReady: Bool { setup == .ready }
 
     func host() async -> String { await device.currentHost() }
-    /// WiFi first, Bluetooth second.
+    /// Whichever pipe is known to work, tried first.
     ///
-    /// Not a preference so much as an ordering by capability: WiFi is the pipe
-    /// that also carries firmware and a web page, so when it is there it is the
-    /// one to use. Bluetooth needs no credentials, no router and no address,
-    /// which is exactly when it is the only one left.
+    /// This used to try WiFi on every command and fall back to Bluetooth when
+    /// it failed. That is correct and it is slow in the one case where the
+    /// fallback exists to help: on a network with client isolation — an office
+    /// guest network, most hotel WiFi — the panel joins happily, gets an
+    /// address, syncs its clock, and is nonetheless unreachable from this Mac
+    /// forever. Every status change then waited out the full HTTP timeout
+    /// before Bluetooth got a turn, and the poll loop spent two of every five
+    /// seconds doing the same. That is the two radios "fighting": not
+    /// contention on the air, but the helper re-learning the same lesson
+    /// several times a minute.
+    ///
+    /// So the answer is remembered. `reachable` is measured by the poll loop
+    /// and is the ordering, not a preference: when WiFi works it goes first,
+    /// because it is the pipe that also carries firmware and a web page; when
+    /// it is known not to, the attempt is skipped entirely rather than
+    /// repeated. A failure on a link we believed in marks it down immediately,
+    /// so the *next* command is already fast.
     func send(_ s: Status) async {
-        if await device.setStatus(s) {
-            link = .wifi
-            return
+        // Recorded before anything is attempted, so the last resort below
+        // cannot repeat an attempt that has already just timed out. Paying the
+        // HTTP timeout twice in one command is worse than the behaviour this
+        // whole change exists to remove.
+        let triedWifi = reachable
+
+        if reachable {
+            if await device.setStatus(s) {
+                link = .wifi
+                return
+            }
+            // Believed reachable and was not. Say so now rather than finding
+            // out again on the next command.
+            reachable = false
         }
+
         if ble.ready {
             ble.send(["status": s.rawValue])
             link = .bluetooth
+            return
+        }
+
+        // Neither pipe is known to work and Bluetooth is not there either.
+        // One timeout is cheaper than telling somebody their panel is gone
+        // when it has merely come back on a different address.
+        if !triedWifi, await device.setStatus(s) {
+            reachable = true
+            link = .wifi
             return
         }
         link = .none
