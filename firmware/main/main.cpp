@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "driver/gpio.h"
+#include "driver/temperature_sensor.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -106,6 +107,20 @@ extern "C" void app_main(void) {
     gpio_dump_io_configuration(
         stdout, (1ULL << 0) | (1ULL << 3) | (1ULL << 20) | (1ULL << 21));
   }
+
+  // The chip's own temperature, because "it goes wrong after half an hour" is
+  // a thermal statement and nothing here could measure one. It costs a
+  // peripheral nobody else is using and one reading every couple of seconds.
+  temperature_sensor_handle_t tsens = nullptr;
+  {
+    temperature_sensor_config_t tcfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+    if (temperature_sensor_install(&tcfg, &tsens) != ESP_OK ||
+        temperature_sensor_enable(tsens) != ESP_OK) {
+      tsens = nullptr;
+      ESP_LOGW(TAG, "no internal temperature sensor");
+    }
+  }
+  unsigned long frame_drops = 0;
 
   const int64_t boot_us = esp_timer_get_time();
   bool mapping = kMapTestSeconds > 0;
@@ -223,19 +238,31 @@ extern "C" void app_main(void) {
     // the wire has overlapped with this frame's work.
     const esp_err_t err = ws2812_wait(strip, 50);
     if (err != ESP_OK) ESP_LOGE(TAG, "led wait failed: %s", esp_err_to_name(err));
-    ws2812_write_async(strip, wire[cur]);
+    // The return was dropped on the floor. A frame that fails to queue — or
+    // whose predecessor did not finish inside the wait — is simply not shown,
+    // and the panel keeps the one before it; from across the room that is a
+    // flicker, and there was nothing anywhere saying it had happened. Counted
+    // rather than logged per occurrence, because if it starts happening it
+    // will happen at a hundred hertz.
+    if (ws2812_write_async(strip, wire[cur]) != ESP_OK) ++frame_drops;
     cur ^= 1;
 
     meter.tick(t_us);
     if (esp_timer_get_time() - last_log_us > 1500000) {
       last_log_us = esp_timer_get_time();
+      // Both are here for the same reason: a fault that takes half an hour to
+      // appear needs something that was being watched the whole time.
+      float chip_c = -1.0f;
+      if (tsens) temperature_sensor_get_celsius(tsens, &chip_c);
+      const unsigned free_heap =
+          static_cast<unsigned>(esp_get_free_heap_size());
       // The encoder's illegal-transition count is here on purpose: a non-zero
       // value at ordinary turning speed means the interrupt is being starved,
       // and that is far easier to see in a log line than on the panel.
       ESP_LOGI(TAG,
                "fps=%.1f avg=%.2fms max=%.2fms power=%.0f%% screen=%s "
                "detents=%ld illegal=%lu  pads=%c%c%c enc A=%d B=%d sw=%d %s "
-               "g=%.2f plane=%.2f bright=%d(%d%%)",
+               "g=%.2f plane=%.2f %.1fC heap=%u drops=%lu bright=%d(%d%%)",
                meter.fps(), meter.frame_ms_avg(), meter.frame_ms_max(),
                st.power_scale * 100.0f, panel::screen_name(app.screen()),
                static_cast<long>(ports.encoder_detents()),
@@ -246,7 +273,7 @@ extern "C" void app_main(void) {
                (ports.raw_encoder() & 1) ? 1 : 0,
                (ports.raw_encoder() & 2) ? 1 : 0,
                (ports.raw_encoder() & 4) ? 1 : 0,
-               panel::status_label(app.state().status), ports.last_g(), ports.last_plane(),
+               panel::status_label(app.state().status), ports.last_g(), ports.last_plane(), chip_c, free_heap, frame_drops,
                app.state().brightness,
                (app.state().brightness * 100 + 127) / 255);
       if (kPinScan) {
