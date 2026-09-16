@@ -49,6 +49,7 @@ enum class SettingId : uint8_t {
   ActionForgetHosts,
   ActionForgetWifi,
   ActionFactory,
+  WifiOn,
   Count,
 };
 
@@ -64,6 +65,16 @@ enum class SettingKind : uint8_t {
   // Anything destructive goes through Screen::Confirm first. A knob has no
   // undo.
   Action,
+
+  // A toggle whose value lives behind Ports rather than in Settings.
+  //
+  // Everything else here reads and writes a field of the settings struct, and
+  // one thing genuinely does not: whether the radio is on has to survive a
+  // settings migration and is owned by the network component. Rather than
+  // bend Settings around it, this kind says "ask the port" — App has one and
+  // settings_tree does not, which is also why setting_get and setting_set
+  // ignore these ids exactly as they ignore the actions.
+  PortToggle,
   // Hands off to a screen of its own, because the value deserves better than a
   // number: brightness and hue both have pickers that show you the thing
   // itself rather than a figure describing it.

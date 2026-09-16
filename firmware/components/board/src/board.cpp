@@ -538,5 +538,7 @@ void DevicePorts::begin_pairing() { net_begin_pairing(); }
 void DevicePorts::forget_hosts() { net_forget_hosts(); }
 void DevicePorts::forget_network() { net_forget_network(); }
 void DevicePorts::factory_reset() { net_factory_reset(); }
+bool DevicePorts::wifi_enabled() { return net_wifi_enabled(); }
+void DevicePorts::set_wifi_enabled(bool on) { net_wifi_set_enabled(on); }
 
 }  // namespace board

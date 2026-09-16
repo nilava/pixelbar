@@ -202,6 +202,7 @@ extern "C" void app_main(void) {
         ports.set_passkey(net_passkey());
         ports.set_net(m == NET_MODE_ONLINE  ? ui::Ports::NetMode::Online
                       : m == NET_MODE_JOINING ? ui::Ports::NetMode::Joining
+                      : m == NET_MODE_OFF     ? ui::Ports::NetMode::Off
                                               : ui::Ports::NetMode::Setup,
                       net_panel_text());
       }

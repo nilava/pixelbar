@@ -66,6 +66,8 @@ class DevicePorts : public ui::Ports {
   void forget_hosts() override;
   void forget_network() override;
   void factory_reset() override;
+  bool wifi_enabled() override;
+  void set_wifi_enabled(bool on) override;
 
   void set_net(ui::Ports::NetMode m, const char* text) {
     net_mode_ = m;

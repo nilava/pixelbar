@@ -875,6 +875,10 @@ class TestPorts : public Ports {
   void forget_hosts() override { ++forget_host_calls; }
   void forget_network() override { ++forget_net_calls; }
   void factory_reset() override { ++factory_calls; }
+  bool wifi_enabled() override { return wifi_on; }
+  void set_wifi_enabled(bool on) override { wifi_on = on; ++wifi_writes; }
+  bool wifi_on = true;
+  int wifi_writes = 0;
 
   int pairs = 0;
   const char* names[8] = {"MAC", "PHONE", "IPAD", "WORK",
@@ -1311,6 +1315,44 @@ void test_app_adjust() {
     r.run(0.2f);
     CHECK_EQ(static_cast<int>(r.app.screen()),
              static_cast<int>(panel::Screen::WifiFailed));
+  }
+
+  CASE("the radio can be switched off from the knob");
+  {
+    // The value lives behind the port rather than in Settings, because
+    // Settings is one versioned blob whose loader rejects any version but the
+    // current one — a new field there would reset every device to defaults.
+    // So this asserts the round trip through the seam, which is the part a
+    // struct field would have got for free.
+    AppRig r;
+    r.enter("WIFI", "USE");
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::Setting));
+    CHECK(r.app.state().set_on);
+
+    r.turn(1);
+    CHECK(!r.ports.wifi_on);
+    CHECK(!r.app.state().set_on);
+    CHECK_EQ(r.ports.wifi_writes, 1);
+
+    // Any turn flips it, rather than a count of them landing back where it
+    // started — the same rule as the confirm screen.
+    r.turn(3);
+    CHECK(r.ports.wifi_on);
+    CHECK_EQ(r.ports.wifi_writes, 2);
+  }
+
+  CASE("a panel with its radio off says so, then gets out of the way");
+  {
+    AppRig r(true, ui::Ports::NetMode::Online);
+    r.ports.mode = ui::Ports::NetMode::Off;
+    r.run(0.2f);
+    CHECK_EQ(static_cast<int>(r.app.screen()),
+             static_cast<int>(panel::Screen::WifiOff));
+    // A notice, not a destination. Off is a state you chose, so the panel
+    // does not sit on it staring at you.
+    r.run(13.0f);
+    CHECK(r.app.screen() != panel::Screen::WifiOff);
   }
 
   CASE("the panel can erase itself, but only on purpose");
@@ -2110,8 +2152,13 @@ void test_settings_tree() {
       for (int i = 0; i < ui::kGroups[g].count; ++i) {
         const ui::SettingDesc& d = ui::kGroups[g].items[i];
         // A setting with its own screen keeps its range there, so lo and hi
-        // here are placeholders and walking them would mean nothing.
+        // here are placeholders and walking them would mean nothing. An
+        // action holds no value at all, and a port toggle's value lives behind
+        // Ports rather than in this struct — for both, setting_get and
+        // setting_set are deliberately no-ops.
         if (d.kind == ui::SettingKind::Screen) continue;
+        if (d.kind == ui::SettingKind::Action) continue;
+        if (d.kind == ui::SettingKind::PortToggle) continue;
         ui::Settings s;
         for (int v = d.lo; v <= d.hi; v += (d.step > 0 ? d.step : 1)) {
           ui::setting_set(s, d.id, v);

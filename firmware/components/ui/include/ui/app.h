@@ -194,7 +194,8 @@ class App {
   // True for the three network notices, which share a way in and a way out.
   static bool is_net_screen(panel::Screen s) {
     return s == panel::Screen::WifiSetup || s == panel::Screen::WifiConnecting ||
-           s == panel::Screen::WifiInfo || s == panel::Screen::WifiFailed;
+           s == panel::Screen::WifiInfo || s == panel::Screen::WifiFailed ||
+           s == panel::Screen::WifiOff;
   }
   // Whether the person in front of the panel is following a setup they
   // started. Set when setup mode begins and cleared once an address arrives,

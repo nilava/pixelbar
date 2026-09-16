@@ -71,6 +71,7 @@ typedef enum {
   NET_MODE_SETUP,    // no stored credentials: the setup AP is up
   NET_MODE_JOINING,  // credentials stored, trying to associate
   NET_MODE_ONLINE,   // associated, with an address
+  NET_MODE_OFF,      // the radio is switched off, from the knob or the API
 } net_mode_t;
 
 // Brings up WiFi and, once it has an address, the HTTP server. Returns as soon
@@ -132,6 +133,16 @@ void net_publish_frame(const uint8_t* rgb, int count);
 // in reserve. Call it only once the device has demonstrably survived: doing it
 // at startup would defeat the point of rollback entirely.
 void net_mark_healthy(void);
+
+// The radio, switched from the panel's own settings or over Bluetooth.
+//
+// Off means off: the station is stopped, nothing retries, and the six-failure
+// fallback that would otherwise raise the setup AP is skipped — any one of
+// which, left alone, would turn it back on within the minute. Bluetooth is
+// unaffected, which is the point of having two radios and is what makes this
+// safe to reach from the knob.
+bool net_wifi_enabled(void);
+void net_wifi_set_enabled(bool on);
 
 // Who the panel is paired with, and the three things it can do about that.
 //

@@ -15,6 +15,7 @@
 #include "esp_timer.h"
 #include "esp_mac.h"
 #include "esp_wifi.h"
+#include "nvs.h"
 #include "captive_dns.h"
 #include "creds.h"
 #include "auth.h"
@@ -103,6 +104,10 @@ static char s_try_error[48] = {0};
 // Dropping the setup AP is deferred so the page has a moment to read the new
 // address before the network it is asking over disappears underneath it.
 static esp_timer_handle_t s_ap_down_timer = NULL;
+// Whether the radio is wanted at all. Declared here rather than beside its
+// load/save pair because net_mode() and net_panel_text() are above them and
+// both have to answer for it.
+static bool s_wifi_wanted = true;
 
 // How many boot-time join failures before falling back to the setup AP.
 //
@@ -117,7 +122,10 @@ static esp_timer_handle_t s_ap_down_timer = NULL;
 // still in setup — the AP is up and the portal is serving — but what the
 // person standing in front of the panel is doing is waiting to find out
 // whether it worked, and that is what the panel should say.
-net_mode_t net_mode(void) { return s_trying ? NET_MODE_JOINING : s_mode; }
+net_mode_t net_mode(void) {
+  if (!s_wifi_wanted) return NET_MODE_OFF;
+  return s_trying ? NET_MODE_JOINING : s_mode;
+}
 const char* net_setup_ssid(void) { return s_ap_ssid; }
 const char* net_error(void) { return s_try_error; }
 
@@ -125,9 +133,37 @@ const char* net_error(void) { return s_try_error; }
 // network to join, the network being tried, or the address to visit. Decided
 // here because this is where the state is; main would only be guessing.
 const char* net_panel_text(void) {
+  if (!s_wifi_wanted) return "OFF";
   if (s_trying) return s_try_ssid;
   if (s_mode == NET_MODE_ONLINE) return s_ip;
   return s_ap_ssid;
+}
+
+// Whether the radio is wanted at all.
+//
+// Its own NVS key in the shared namespace, exactly as creds.c and auth.c do,
+// and deliberately *not* a field in ui::Settings. That struct is loaded as one
+// versioned blob and migrate() refuses any version that is not current, with
+// no v1->v2 branch — so adding a bool there would reset every existing device
+// to defaults on the next flash. Not bumping the version would be worse: a new
+// field could land in existing padding and be read from stale bytes.
+#define WIFI_NS "pixelbar"
+#define WIFI_ON_KEY "wifion"
+
+static void wifi_wanted_load(void) {
+  nvs_handle_t h;
+  if (nvs_open(WIFI_NS, NVS_READONLY, &h) != ESP_OK) return;
+  uint8_t v = 1;
+  if (nvs_get_u8(h, WIFI_ON_KEY, &v) == ESP_OK) s_wifi_wanted = v != 0;
+  nvs_close(h);
+}
+
+static void wifi_wanted_save(bool on) {
+  nvs_handle_t h;
+  if (nvs_open(WIFI_NS, NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_set_u8(h, WIFI_ON_KEY, on ? 1 : 0);
+  nvs_commit(h);
+  nvs_close(h);
 }
 
 // The station half has nothing to connect to while the device is in setup
@@ -136,6 +172,11 @@ const char* net_panel_text(void) {
 // radio off the AP's channel, and filling the log with reason 201 — while a
 // phone is trying to hold a connection to the portal.
 static bool should_connect(void) {
+  // The off switch is honoured here rather than only at the call sites,
+  // because there are five of them — the retry timer, the disconnect handler's
+  // backoff, the start path, the provision path and the STA_START event — and
+  // one of them forgetting would turn the radio back on by itself.
+  if (!s_wifi_wanted) return false;
   return s_mode != NET_MODE_SETUP || s_trying;
 }
 
@@ -246,6 +287,12 @@ static void on_wifi(void* arg, esp_event_base_t base, int32_t id, void* data) {
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
     s_connected = false;
     s_ip[0] = 0;
+    // Switching the radio off disconnects on the way down, and that
+    // disconnection must not be mistaken for a network that has gone away.
+    // Without this the backoff below rearms the retry timer and, after six
+    // attempts, raises the setup AP — so the radio would switch itself back
+    // on within the minute and look like the off switch had not worked.
+    if (!s_wifi_wanted) return;
     // The reason is the whole diagnosis and costs one line. 201 is "no such
     // network" — which on this chip most often means the network is 5 GHz,
     // because the C3 has a 2.4 GHz radio and nothing else. 15 and 2 are the
@@ -1076,6 +1123,7 @@ static void scan_task(void* arg) {
 }
 
 esp_err_t net_start(void) {
+  wifi_wanted_load();
   auth_init();
   s_cmds = xQueueCreate(16, sizeof(net_cmd_t));
   if (!s_cmds) return ESP_ERR_NO_MEM;
@@ -1224,6 +1272,44 @@ uint32_t net_passkey(void) {
   return ble_code ? ble_code : auth_pairing_code();
 }
 void net_mark_healthy(void) { ota_mark_healthy(); }
+
+bool net_wifi_enabled(void) { return s_wifi_wanted; }
+
+void net_wifi_set_enabled(bool on) {
+  if (on == s_wifi_wanted) return;
+  s_wifi_wanted = on;
+  wifi_wanted_save(on);
+
+  if (!on) {
+    // Everything that would bring it back, stopped first. The retry timer is
+    // the obvious one; the AP-down timer matters too, because its expiry path
+    // reconfigures the interface.
+    if (s_retry_timer) esp_timer_stop(s_retry_timer);
+    if (s_ap_down_timer) esp_timer_stop(s_ap_down_timer);
+    s_trying = false;
+    s_connected = false;
+    s_ip[0] = '\0';
+    esp_wifi_disconnect();
+    const esp_err_t err = esp_wifi_stop();
+    ESP_LOGW(TAG, "wifi off (%s); bluetooth is unaffected", esp_err_to_name(err));
+    return;
+  }
+
+  ESP_LOGI(TAG, "wifi on");
+  s_retries = 0;
+  if (esp_wifi_start() != ESP_OK) return;
+  // Back to whichever half was right before it went off: the setup AP if
+  // there are no credentials, an association attempt if there are. Deciding
+  // it here rather than trusting the mode left behind, because the mode was
+  // reported as OFF for the whole time the radio was down.
+  char ssid[33] = {0}, pass[65] = {0};
+  if (creds_load(ssid, sizeof(ssid), pass, sizeof(pass))) {
+    s_mode = NET_MODE_JOINING;
+    esp_wifi_connect();
+  } else {
+    start_setup_ap();
+  }
+}
 
 int net_paired_count(void) { return auth_client_count(); }
 const char* net_paired_name(int i) { return auth_client_name(i); }

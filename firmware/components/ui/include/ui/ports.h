@@ -57,7 +57,7 @@ struct Ports {
   // taken from net.h because nothing in `ui` may include an ESP-IDF header —
   // the values are the same three states, and the device side maps between
   // them.
-  enum class NetMode : uint8_t { Setup, Joining, Online };
+  enum class NetMode : uint8_t { Setup, Joining, Online, Off };
   virtual NetMode net_mode() { return NetMode::Online; }
   // The setup SSID to join, or the address to visit, depending on the mode.
   // Must outlive the frame; on the device it is a static buffer in `net`.
@@ -100,6 +100,16 @@ struct Ports {
   // here that cannot be undone from anywhere else, and the only way back for a
   // panel whose paired host no longer exists.
   virtual void factory_reset() {}
+
+  // The radio, as a thing that can be switched off from the knob.
+  //
+  // Read and written through the port rather than stored in Settings: that
+  // struct is one versioned blob whose loader rejects any version but the
+  // current one, so a new field there would reset every device to defaults.
+  // The device keeps this in its own NVS key, the way the credentials and the
+  // tokens already are.
+  virtual bool wifi_enabled() { return true; }
+  virtual void set_wifi_enabled(bool on) {}
 
   // Something a host asked the panel to show.
   //

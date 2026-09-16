@@ -1,3 +1,5 @@
+#include <cstdio>
+
 #include "ui/app.h"
 
 #include "panel/anim.h"
@@ -161,7 +163,13 @@ void App::update(float dt_s, double now_s) {
       net_mode_ = mode;
       if (mode == Ports::NetMode::Setup) net_watching_ = true;
       if (!booting_) {
-        if (mode == Ports::NetMode::Setup) {
+        if (mode == Ports::NetMode::Off) {
+          // Switching the radio off is something you just did on this panel,
+          // so it says so once and then gets out of the way like every other
+          // notice here.
+          show_net(panel::Screen::WifiOff);
+          net_info_s_ = kNetInfoSeconds;
+        } else if (mode == Ports::NetMode::Setup) {
           show_net(panel::Screen::WifiSetup);
         } else if (mode == Ports::NetMode::Joining && net_watching_) {
           // Only for a join someone is standing there waiting on. The one at
@@ -206,6 +214,10 @@ void App::update(float dt_s, double now_s) {
     }
 
     // The address screen is a notice, not a destination.
+    if (net_info_s_ > 0.0f && screen() == panel::Screen::WifiOff) {
+      net_info_s_ -= dt_s;
+      if (net_info_s_ <= 0.0f) go_home();
+    }
     if (net_info_s_ > 0.0f && screen() == panel::Screen::WifiInfo) {
       net_info_s_ -= dt_s;
       if (net_info_s_ <= 0.0f) go_home();
@@ -368,6 +380,18 @@ void App::refresh_setting() {
   ui_.set_icon = d->row.icon;
   ui_.set_label = d->row.label;
   ui_.set_tint = d->row.color;
+  if (d->kind == SettingKind::PortToggle) {
+    // The value is the port's, not the struct's. Read every time the row is
+    // shown rather than cached, because the network component can change it
+    // on its own — a join that never succeeds does not turn the radio off,
+    // but a factory reset does.
+    const bool on = ports_ && ports_->wifi_enabled();
+    snprintf(set_text_, sizeof(set_text_), "%s", on ? "ON" : "OFF");
+    ui_.set_text = set_text_;
+    ui_.set_fraction = -1.0f;
+    ui_.set_on = on;
+    return;
+  }
   ui_.set_text = setting_text(set_, *d, set_text_, sizeof(set_text_));
   ui_.set_fraction = setting_fraction(set_, *d);
   ui_.set_on = setting_get(set_, d->id) != 0;
@@ -782,6 +806,16 @@ void App::adjust(int detents, float rate) {
     case Screen::Setting: {
       const SettingDesc* d = current_setting();
       if (!d) break;
+      if (d->kind == SettingKind::PortToggle) {
+        // Any turn flips it, for the same reason the confirm screen does:
+        // there are two states and no scale, so counting detents would only
+        // let a brisk turn land back where it started.
+        if (detents != 0 && ports_) {
+          ports_->set_wifi_enabled(!ports_->wifi_enabled());
+          refresh_setting();
+        }
+        break;
+      }
       // Lists wrap and ranges clamp, which is the difference between choosing
       // and adjusting: a list has no ends worth stopping at, and a number run
       // off its end should stay there rather than reappear at the other.

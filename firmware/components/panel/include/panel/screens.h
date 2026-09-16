@@ -101,7 +101,8 @@ enum class Screen : uint8_t {
   WifiSetup,       // no credentials: join this network and open the page
   WifiConnecting,  // trying the credentials someone just typed
   WifiInfo,
-  WifiFailed,      // that network said no, and why        // the address, so you can reach the page from your own network
+  WifiFailed,      // that network said no, and why
+  WifiOff,         // the radio is switched off, deliberately        // the address, so you can reach the page from your own network
   OtaProgress,     // a firmware update is being written; do not unplug it
   Pairing,         // the six digits a Bluetooth host must be told
   Draw,            // whatever a host asked the panel to show

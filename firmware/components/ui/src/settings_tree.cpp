@@ -115,6 +115,10 @@ const SettingDesc kClockItems[] = {
 // left after squeezing, and needed explaining, which a label that needs
 // explaining has already failed at.
 const SettingDesc kNetItems[] = {
+    // First, because it is the one that decides whether the rest of the group
+    // means anything.
+    {ROW(kIconDownload, "USE", kNet), SettingId::WifiOn, SettingKind::PortToggle,
+     panel::Screen::Count, 0, 1, 1, "", kOffOn, 2},
     {ROW(kIconInfo, "IP", kNet), SettingId::Count, SettingKind::Screen,
      panel::Screen::WifiInfo, 0, 0, 0, "", nullptr, 0},
     // Forgetting the network is how a panel moves house, and the only way back
@@ -187,6 +191,8 @@ int setting_get(const Settings& s, SettingId id) {
     case SettingId::ActionForgetHosts:
     case SettingId::ActionForgetWifi:
     case SettingId::ActionFactory:
+    // Behind the port, not in the struct. See SettingKind::PortToggle.
+    case SettingId::WifiOn:
     case SettingId::Count: break;
   }
   return 0;
@@ -212,6 +218,8 @@ void setting_set(Settings& s, SettingId id, int v) {
     case SettingId::ActionForgetHosts:
     case SettingId::ActionForgetWifi:
     case SettingId::ActionFactory:
+    // Behind the port, not in the struct. See SettingKind::PortToggle.
+    case SettingId::WifiOn:
     case SettingId::Count: break;
   }
   // Every write goes through the same clamp the loader uses, so a value that

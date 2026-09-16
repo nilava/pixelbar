@@ -119,6 +119,7 @@ const char* screen_name(Screen s) {
     case Screen::WifiConnecting: return "wificonnecting";
     case Screen::WifiInfo: return "wifiinfo";
     case Screen::WifiFailed: return "wififailed";
+    case Screen::WifiOff: return "wifioff";
     case Screen::OtaProgress: return "ota";
     case Screen::Pairing: return "pairing";
     case Screen::Draw: return "draw";
@@ -771,6 +772,24 @@ void draw_screen(Framebuffer& fb, Screen s, const UiState& ui, const Anim& a,
       const float drift = a.phase(60.0f) * kWidth;
       draw_icon_aa(fb, drift - 4.0f, 0.0f, kIconMoon, moon);
       draw_icon_aa(fb, drift - 4.0f + kWidth, 0.0f, kIconMoon, moon);
+      break;
+    }
+
+    case Screen::WifiOff: {
+      // Off on purpose, which has to look different from off by accident.
+      // The same signal mark, unlit, with no arcs climbing and nothing
+      // breathing: a screen that is not trying to tell you to do anything.
+      const RGB dim(90, 90, 100);
+      for (int arc = 0; arc < 3; ++arc) {
+        const int r = 2 + arc * 2;
+        for (int i = 0; i <= r; ++i) {
+          const float th = 1.5708f * (float)i / (float)r;
+          const int x = static_cast<int>(r * std::sin(th) + 0.5f);
+          const int y = 7 - static_cast<int>(r * std::cos(th) + 0.5f);
+          fb.set(x, y, dim.scaled(35));
+        }
+      }
+      mini_draw_text_centered(fb, 8, kWidth - 8, 1, "OFF", dim);
       break;
     }
 
